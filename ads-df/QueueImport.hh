@@ -90,8 +90,8 @@ public:
 class NativeInputQueueOperatorType : public RuntimeOperatorType
 {
 public:
-  typedef FieldImporter<StringDataBlock> field_importer_type;
-  typedef std::vector<FieldImporter<StringDataBlock> >::const_iterator field_importer_const_iterator;
+  typedef FieldImporter field_importer_type;
+  typedef std::vector<FieldImporter>::const_iterator field_importer_const_iterator;
   typedef StringDataBlock input_buffer_type;
 
   // Importer instructions

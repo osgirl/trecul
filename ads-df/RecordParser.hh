@@ -289,674 +289,6 @@ public:
   }
 };
 
-template <class _InputBuffer>
-class FieldImporter {
-public:
-  static void createDefaultImport(const RecordType * recordType,
-				  const RecordType * baseRecordType,
-				  char fieldDelim,
-				  char recordDelim,
-				  std::vector<FieldImporter<_InputBuffer> >& importers)
-  {
-    typedef FieldImporter<_InputBuffer> field_importer_type;
-    // Apply default rules for inferring physical layout from
-    // logical record definition.
-    for(RecordType::const_member_iterator mit = baseRecordType->begin_members();
-	mit != baseRecordType->end_members();
-	++mit) {
-      // TODO: Last field allow either record or field terminator so that
-      // we can support ignoring trailing fields.
-      char delim = mit+1 == baseRecordType->end_members() ? recordDelim : fieldDelim;
-      if (recordType->hasMember(mit->GetName())) {
-	const RecordMember& member(recordType->getMember(mit->GetName()));
-	FieldAddress offset = recordType->getMemberOffset(mit->GetName());
-	// Get the importer to set up.
-	importers.push_back(field_importer_type());
-	field_importer_type& fit(importers.back());
-	// Dispatch on in-memory type.
-	switch(member.GetType()->GetEnum()) {
-	case FieldType::VARCHAR:
-	  fit.InitVariableLengthTerminatedString(offset, delim, 
-						 member.GetType()->isNullable());
-	  break;
-	case FieldType::CHAR:
-	  fit.InitFixedLengthString(offset, 
-				    member.GetType()->GetSize(), 
-				    member.GetType()->isNullable());
-	  break;
-	case FieldType::BIGDECIMAL:
-	  fit.InitDelimitedDecimal(offset, delim, member.GetType()->isNullable());
-	  break;
-	case FieldType::INT32:
-	  fit.InitDecimalInt32(offset, 
-			       member.GetType()->isNullable());
-	  break;
-	case FieldType::INT64:
-	  fit.InitDecimalInt64(offset, 
-			       member.GetType()->isNullable());
-	  break;
-	case FieldType::DOUBLE:
-	  fit.InitDouble(offset, delim, 
-			 member.GetType()->isNullable());
-	  break;
-	case FieldType::DATETIME:
-	  fit.InitDelimitedDatetime(offset, 
-				    member.GetType()->isNullable());
-	  break;
-	case FieldType::DATE:
-	  fit.InitDelimitedDate(offset, 
-				member.GetType()->isNullable());
-	  break;
-	case FieldType::FUNCTION:
-	  throw std::runtime_error("Importing function types not supported");
-	  break;
-	default:
-	  throw std::runtime_error("Importing unknown field type");
-	}
-      }
-      importers.push_back(field_importer_type());
-      importers.back().InitConsumeTerminatedString(delim);
-    }
-    // Optimize this a bit.  Iterate backward to find the
-    // last importer that generates a value (not just consume).
-    // Make one more importer consuming till the end of the line.
-    for(std::size_t i=1; i<=importers.size(); ++i) {
-      if (!importers[importers.size()-i].isConsumeOnly()) {
-	if (i > 2) {
-	  // Last generator is at size - i.  So make the last
-	  // element a consumer at size - i + 1.  Thus new size
-	  // is size-i+2.
-	  importers.resize(importers.size() - i + 2);
-	  importers.back().InitConsumeTerminatedString(recordDelim);
-	}
-	break;
-      }
-    }
-  }
-
-private:
-  typedef bool (FieldImporter::*ImportFunc) (_InputBuffer& source, RecordBuffer target) const;
-  std::size_t mSourceSize;
-  FieldAddress mTargetOffset;
-  ImportFunc mImporter;
-
-  static const std::vector<ImportFunc>& availableImporters()
-  {
-    static std::vector<ImportFunc> funcs;
-    if (funcs.size() == 0) {
-      funcs.push_back(&FieldImporter::ImportFixedLengthString);
-      funcs.push_back(&FieldImporter::ImportFixedLengthTerminatedString);
-      funcs.push_back(&FieldImporter::ImportVariableLengthTerminatedString);
-      funcs.push_back(&FieldImporter::ImportVariableLengthString);
-      funcs.push_back(&FieldImporter::ConsumeTerminatedString);
-      funcs.push_back(&FieldImporter::ImportDecimalInt32);
-      funcs.push_back(&FieldImporter::ImportDouble);
-      funcs.push_back(&FieldImporter::ImportDelimitedDatetime);
-      funcs.push_back(&FieldImporter::ImportDelimitedDecimal);
-      funcs.push_back(&FieldImporter::ImportDecimalInt64);
-      funcs.push_back(&FieldImporter::ImportDelimitedDate);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportFixedLengthString>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportFixedLengthTerminatedString>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportVariableLengthTerminatedString>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportVariableLengthString>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ConsumeTerminatedString>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDecimalInt32>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDouble>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDatetime>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDecimal>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDecimalInt64>);
-      funcs.push_back(&FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDate>);
-    }
-    return funcs;
-  }
-
-  int getImporterIndex() const
-  {
-    if(mImporter == NULL) return -1;
-    const std::vector<ImportFunc>& funcs(availableImporters());
-    for(std::size_t i=0; i<funcs.size(); ++i) {
-      if (mImporter == funcs[i]) {
-	return i;
-      }
-    }
-    throw std::runtime_error("Unknown importer");
-  }
-  ImportFunc getImporter(int idx)
-  {
-    if (idx==-1) return NULL;
-    const std::vector<ImportFunc>& funcs(availableImporters());
-    if (idx < 0 || (std::size_t) idx >= funcs.size()) {
-      throw std::runtime_error("Invalid importer index");
-    }
-    return funcs[idx];
-  }
-  // Serialization
-  friend class boost::serialization::access;
-  template <class Archive>
-  void save(Archive & ar, const unsigned int version) const
-  {
-    int tmp = getImporterIndex();
-    ar & BOOST_SERIALIZATION_NVP(mSourceSize);
-    ar & BOOST_SERIALIZATION_NVP(mTargetOffset);
-    ar & BOOST_SERIALIZATION_NVP(tmp);
-  }
-  template <class Archive>
-  void load(Archive & ar, const unsigned int version) 
-  {
-    int tmp;
-    ar & BOOST_SERIALIZATION_NVP(mSourceSize);
-    ar & BOOST_SERIALIZATION_NVP(mTargetOffset);
-    ar & BOOST_SERIALIZATION_NVP(tmp);
-    mImporter =  getImporter(tmp);
-  }
-  BOOST_SERIALIZATION_SPLIT_MEMBER()
-
-  static int32_t PrefixStringLength(const char * prefixLength)
-  {
-    int32_t val = (*prefixLength++ - '0') * 1000;
-    val += (*prefixLength++ - '0') * 100;
-    val += (*prefixLength++ - '0') * 10;
-    val += (*prefixLength++ - '0');
-    return val;
-  }
-
-  bool ImportFixedLengthString(_InputBuffer& source, RecordBuffer target) const
-  {
-    uint8_t * s = source.open(mSourceSize);
-    if (s != NULL) {
-      mTargetOffset.SetFixedLengthString(target, (const char *) s, mSourceSize);
-      source.consume(mSourceSize);
-      return true;
-    }
-    return false;
-  }
-
-  bool ImportFixedLengthTerminatedString(_InputBuffer& source, RecordBuffer target) const
-  {
-    uint8_t term = ((const FixedLengthPad *) &mSourceSize)->TermChar;
-    uint8_t * s = source.open(1);
-    AutoMark<_InputBuffer> m(source);
-    while(true) {
-      if (!s) {
-	return false;
-      }
-      if (*s != term) {
-	source.consume(1);
-	s = source.open(1);
-      } else {
-	source.consume(1);
-	break;
-      }
-    }
-
-    // Done reading.  Now the mark is stable.
-    uint8_t * mark = source.getMark();
-    // Check that length isn't too long...
-    if (mark + ((const FixedLengthPad *) &mSourceSize)->Size < s) {
-      return false;
-    }
-
-    // Set the values we have passing in the pad char and the number we need appended.
-    return true;    
-  }
-
-  bool ImportVariableLengthString(_InputBuffer& source, RecordBuffer target) const
-  {
-    uint8_t * s = source.open(5);
-    if (s != NULL) {
-      int32_t len = PrefixStringLength((char *) s);
-      source.consume(5);
-      s = source.open(len);
-      if (s != NULL) {
-	mTargetOffset.SetVariableLengthString(target, (const char *) s, len);
-	source.consume(len);
-	return true;
-      }
-    }
-    return false;    
-  }
-
-  bool ImportVariableLengthTerminatedString(_InputBuffer& source, RecordBuffer target) const
-  {
-    // HACK: stuff terminator in mSize since it isn't used otherwise
-    uint8_t term = (uint8_t) mSourceSize;
-    uint8_t * s = source.open(1);
-    AutoMark<_InputBuffer> m(source);
-    while(true) {
-      if (!s) return false;
-      if (*s != term) {
-	source.consume(1);
-	s = source.open(1);
-      } else {
-	break;
-      }
-    }
-    mTargetOffset.SetVariableLengthString(target, (const char *) source.getMark(), s-source.getMark());
-    return true;
-  }
-
-  bool ConsumeTerminatedString(_InputBuffer& source, RecordBuffer target) const
-  {
-    // HACK: stuff terminator in mSize since it isn't used otherwise
-    uint8_t term = (uint8_t) mSourceSize;
-    while(true) {      
-      // Open a window bigger than what we might need
-      // to tighten up the inner loop.
-      std::size_t sz = 64;
-      uint8_t * start;
-      source.open(sz, start);
-      if (sz == 0) return false;
-      uint8_t * end = start + sz;
-      uint8_t * s = start;
-      while(s != end) {
-	if (*s++ == term) {
-	  source.consume(std::size_t(s - start));
-	  return true;    
-	}
-      }
-      source.consume(sz);
-    }
-  }
-
-  bool ImportDecimalInt32(_InputBuffer & source, RecordBuffer target) const
-  {
-    bool neg = false;
-    uint8_t * s = source.open(1);
-    if (s == NULL) 
-      return false;
-    if (*s == '-') {
-      neg = true;
-      source.consume(1);
-    } else if (*s == '+') {
-      source.consume(1);
-    }
-    int32_t val = 0;
-    while(true) {
-      s = source.open(1);
-      if (s == NULL) {
-	return false;
-      }
-      if (*s > '9' || *s < '0')  {
-	// TODO: Right now assuming and not validating a single delimiter character
-	// TODO: Protect against overflow
-	mTargetOffset.setInt32(neg ? -val : val, target);
-	return true;
-      }
-      val = val * 10 + (*s - '0');
-      source.consume(1);
-    }
-  }
-  
-  bool ImportDouble(_InputBuffer & source, RecordBuffer target) const
-  {
-    uint8_t term = (uint8_t) mSourceSize;
-    uint8_t * s = source.open(1);
-    AutoMark<_InputBuffer> m(source);
-    while(true) {
-      if (!s) return false;
-      if (*s != term) {
-	source.consume(1);
-	s = source.open(1);
-      } else {
-	break;
-      }
-    }
-
-    mTargetOffset.setDouble(atof((char *) source.getMark()), target);
-    return true;    
-  }
-  
-  bool ImportDelimitedDatetime(_InputBuffer & source, RecordBuffer target) const
-  {
-    // Importing a fixed format of 19 chars
-    // YYYY-MM-DD hh:mm:ss
-    static const int32_t formatSz = 19;
-    uint8_t * s = source.open(formatSz);
-    if (s == NULL) return false;
-    unsigned short nums[6];
-    nums[0] = 0;
-    for(int i=0; i<4; i++) {
-      if (*s > '9' || *s < '0')  {
-	return false;
-      }
-      nums[0] = nums[0] * 10 + (*s - '0');
-      s++;
-    }
-
-    // Trust the compiler to unroll these loops
-    // appropriately (or trust that it won't do it
-    // if not beneficial).
-    for(int j=1; j<6; j++) {
-      // TODO: Validate delimiter;
-      s++;
-      nums[j] = 0;
-      for(int i=0; i<2; i++) {
-	if (*s > '9' || *s < '0')  {
-	  return false;
-	}
-	nums[j] = nums[j] * 10 + (*s - '0');
-	s++;
-      }
-    }
-    
-    source.consume(formatSz);
-
-    typedef boost::posix_time::ptime ptime;
-    typedef boost::posix_time::time_duration time_duration;
-    typedef boost::gregorian::date date;
-    // This call profiles to be pretty slow.
-    // Can this be improved without losing too much
-    // safety?
-    ptime t(date(nums[0], nums[1], nums[2]),
-    	    time_duration(nums[3],nums[4],nums[5]));
-    mTargetOffset.setDatetime(t, target);
-    return true;    
-  }
-  
-  bool ImportDelimitedDate(_InputBuffer & source, RecordBuffer target) const
-  {
-    // Importing a fixed format of 10 chars
-    // YYYY-MM-DD
-    static const int32_t formatSz = 10;
-    uint8_t * s = source.open(formatSz);
-    if (s == NULL) return false;
-    unsigned short nums[3];
-    nums[0] = 0;
-    for(int i=0; i<4; i++) {
-      if (*s > '9' || *s < '0')  {
-	return false;
-      }
-      nums[0] = nums[0] * 10 + (*s - '0');
-      s++;
-    }
-
-    // Trust the compiler to unroll these loops
-    // appropriately (or trust that it won't do it
-    // if not beneficial).
-    for(int j=1; j<3; j++) {
-      // TODO: Validate delimiter;
-      s++;
-      nums[j] = 0;
-      for(int i=0; i<2; i++) {
-	if (*s > '9' || *s < '0')  {
-	  return false;
-	}
-	nums[j] = nums[j] * 10 + (*s - '0');
-	s++;
-      }
-    }
-    
-    source.consume(formatSz);
-
-    typedef boost::gregorian::date date;
-    // This call profiles to be pretty slow.
-    // Can this be improved without losing too much
-    // safety?
-    date t(date(nums[0], nums[1], nums[2]));
-    mTargetOffset.setDate(t, target);
-    return true;    
-  }
-  
-  bool ImportDelimitedDecimal(_InputBuffer & source, RecordBuffer target) const
-  {
-    // decNumber requires null terminated string.
-    // Cost of import is high enough the extra copy into
-    // doesn't appear to be a big deal.
-    char buf[DECIMAL128_String];
-    char * bufptr = &buf[0];
-    char * bufend = &buf[DECIMAL128_String];
-    uint8_t term = (uint8_t) mSourceSize;
-    uint8_t * s = source.open(1);
-    while(true) {
-      if (!s) return false;
-      if (*s != term &&
-	  bufptr != bufend) {
-	*bufptr++ = *s;
-	source.consume(1);
-	s = source.open(1);
-      } else {
-	break;
-      }
-    }
-    // Decimal too long!
-    // TODO: Should be more forgiving here due to 
-    // leading and trailing zeros.
-    if (bufptr == bufend)
-      return false;
-
-    *bufptr = 0;
-
-    decContext decCtxt;
-    decContextDefault(&decCtxt, DEC_INIT_DECIMAL128); // no traps, please
-    decimal128FromString(mTargetOffset.getDecimalPtr(target),
-			 buf,
-			 &decCtxt);
-    mTargetOffset.clearNull(target);
-    return decCtxt.status == 0;
-  }
-
-  bool ImportDecimalInt64(_InputBuffer & source, RecordBuffer target) const
-  {
-    bool neg = false;
-    uint8_t * s = source.open(1);
-    if (s == NULL) 
-      return false;
-    if (*s == '-') {
-      neg = true;
-      source.consume(1);
-    } else if (*s == '+') {
-      source.consume(1);
-    }
-    int64_t val = 0;
-    while(true) {
-      s = source.open(1);
-      if (s == NULL) {
-	return false;
-      }
-      if (*s > '9' || *s < '0')  {
-	// TODO: Right now assuming and not validating a single delimiter character
-	// TODO: Protect against overflow
-	mTargetOffset.setInt64(neg ? -val : val, target);
-	return true;
-      }
-      val = val * 10LL + (*s - '0');
-      source.consume(1);
-    }
-  }
-  
-  template <ImportFunc PMF>
-  bool ImportNullableField(_InputBuffer & source, RecordBuffer target) const
-  {
-    // Check for null marker.  Set mark so we can roll back if need be.
-    source.setMark();
-    uint8_t * s = source.open(2);
-    if (s == NULL) {
-      source.releaseMark();
-      return false;
-    }
-    if (s[0] == '\\' && s[1] == 'N') {
-      source.consume(2);
-      source.releaseMark();
-      mTargetOffset.setNull(target);
-      return true;
-    } else {
-      source.rewindMark();
-      return (this->*PMF)(source, target);
-    }
-  }
-
-  struct FixedLengthPad
-  {
-    uint16_t Size;
-    uint8_t TermChar;
-    uint8_t PadChar;
-  };
-
-public:
-  FieldImporter() 
-    :
-    mSourceSize(0),
-    mTargetOffset(0),
-    mImporter(NULL)
-  {
-  }
-
-  void InitFixedLengthString(const FieldAddress& targetOffset, std::size_t sz, bool nullable = false) 
-  {
-    mSourceSize = sz;
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportFixedLengthString>;
-    } else {
-      mImporter = &FieldImporter::ImportFixedLengthString;
-    }
-  }
-
-  void InitFixedLengthTerminatedString(const FieldAddress& targetOffset, 
-				       uint8_t terminator, 
-				       uint8_t padChar, 
-				       uint16_t sz,
-				       bool nullable = false) 
-  {
-    // Use a union
-    FixedLengthPad * hack = (FixedLengthPad *) &mSourceSize;
-    hack->Size = sz;
-    hack->TermChar = terminator;
-    hack->PadChar =padChar;
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportFixedLengthTerminatedString>;
-    } else {
-      mImporter = &FieldImporter::ImportFixedLengthTerminatedString;
-    }
-  }
-
-  void InitVariableLengthString(const FieldAddress& targetOffset, bool nullable=false)
-  {
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportVariableLengthString>;
-    } else {
-      mImporter = &FieldImporter::ImportVariableLengthString;
-    }
-  }
-
-  void InitVariableLengthTerminatedString(const FieldAddress& targetOffset, char terminator, bool nullable=false)
-  {
-    mSourceSize = (uint8_t) terminator;
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportVariableLengthTerminatedString>;
-    } else {
-      mImporter = &FieldImporter::ImportVariableLengthTerminatedString;
-    }
-  }
-
-  void InitConsumeTerminatedString(char terminator)
-  {
-    mSourceSize = (uint8_t) terminator;
-    mImporter = &FieldImporter::ConsumeTerminatedString;
-  }
-
-  void InitDecimalInt32(const FieldAddress& targetOffset, bool nullable = false)
-  {
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDecimalInt32>;
-    } else {
-      mImporter = &FieldImporter::ImportDecimalInt32;
-    }
-  }
-
-  void InitDouble(const FieldAddress& targetOffset, char terminator, bool nullable = false)
-  {
-    mSourceSize = (uint8_t) terminator;
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDouble>;
-    } else {
-      mImporter = &FieldImporter::ImportDouble;
-    }
-  }
-
-  void InitDelimitedDatetime(const FieldAddress& targetOffset, bool nullable = false)
-  {
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDatetime>;
-    } else {
-      mImporter = &FieldImporter::ImportDelimitedDatetime;
-    }
-  }
-
-  void InitDelimitedDate(const FieldAddress& targetOffset, bool nullable = false)
-  {
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDate>;
-    } else {
-      mImporter = &FieldImporter::ImportDelimitedDate;
-    }
-  }
-
-  void InitDelimitedDecimal(const FieldAddress& targetOffset, char terminator, 
-			    bool nullable)
-  {
-    mSourceSize = (uint8_t) terminator;
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDelimitedDecimal>;
-    } else {
-      mImporter = &FieldImporter::ImportDelimitedDecimal;
-    }
-  }
-
-  void InitDecimalInt64(const FieldAddress& targetOffset, bool nullable=false)
-  {
-    mTargetOffset = targetOffset;
-    if (nullable) {
-      mImporter = &FieldImporter::template ImportNullableField<&FieldImporter::ImportDecimalInt64>;
-    } else {
-      mImporter = &FieldImporter::ImportDecimalInt64;
-    }
-  }
-  
-  bool isConsumeOnly() const 
-  {
-    return mImporter == &FieldImporter::ConsumeTerminatedString;
-  }
-
-  bool Import(_InputBuffer & source, RecordBuffer target) const
-  {
-    if (mImporter == NULL) {
-      throw std::runtime_error("Importer not initialized");
-    }
-    return (this->*mImporter)(source, target);
-  }
-};
-  
-// Factory for creating DataBlock instances.
-class DataBlockFactory : public boost::noncopyable
-{
-public:
-  typedef class DataBlock * 
-  (*CreateDataBlockFn) (const char *, int32_t, uint64_t, uint64_t);
-private:
-  boost::mutex * mGuard;
-  std::map<std::string, CreateDataBlockFn> mCreators;
-  DataBlockFactory();
-  ~DataBlockFactory();
-public:
-  static DataBlockFactory& get();
-  void registerCreator(const std::string& uriScheme, 
-		       CreateDataBlockFn creator);
-  class DataBlock * create(const char * file, 
-			   int32_t targetBlockSize, 
-			   uint64_t beginOffset,
-			   uint64_t endOffset);
-
-};
-
 class DataBlock
 {
 protected:
@@ -1055,6 +387,673 @@ public:
   // TODO: Should I be concerned about
   // the virtual function call overhead?
   virtual bool isEOF() =0;
+};
+
+class FieldImporter {
+public:
+  static void createDefaultImport(const RecordType * recordType,
+				  const RecordType * baseRecordType,
+				  char fieldDelim,
+				  char recordDelim,
+				  std::vector<FieldImporter >& importers)
+  {
+    typedef FieldImporter field_importer_type;
+    // Apply default rules for inferring physical layout from
+    // logical record definition.
+    for(RecordType::const_member_iterator mit = baseRecordType->begin_members();
+	mit != baseRecordType->end_members();
+	++mit) {
+      // TODO: Last field allow either record or field terminator so that
+      // we can support ignoring trailing fields.
+      char delim = mit+1 == baseRecordType->end_members() ? recordDelim : fieldDelim;
+      if (recordType->hasMember(mit->GetName())) {
+	const RecordMember& member(recordType->getMember(mit->GetName()));
+	FieldAddress offset = recordType->getMemberOffset(mit->GetName());
+	// Get the importer to set up.
+	importers.push_back(field_importer_type());
+	field_importer_type& fit(importers.back());
+	// Dispatch on in-memory type.
+	switch(member.GetType()->GetEnum()) {
+	case FieldType::VARCHAR:
+	  fit.InitVariableLengthTerminatedString(offset, delim, 
+						 member.GetType()->isNullable());
+	  break;
+	case FieldType::CHAR:
+	  fit.InitFixedLengthString(offset, 
+				    member.GetType()->GetSize(), 
+				    member.GetType()->isNullable());
+	  break;
+	case FieldType::BIGDECIMAL:
+	  fit.InitDelimitedDecimal(offset, delim, member.GetType()->isNullable());
+	  break;
+	case FieldType::INT32:
+	  fit.InitDecimalInt32(offset, 
+			       member.GetType()->isNullable());
+	  break;
+	case FieldType::INT64:
+	  fit.InitDecimalInt64(offset, 
+			       member.GetType()->isNullable());
+	  break;
+	case FieldType::DOUBLE:
+	  fit.InitDouble(offset, delim, 
+			 member.GetType()->isNullable());
+	  break;
+	case FieldType::DATETIME:
+	  fit.InitDelimitedDatetime(offset, 
+				    member.GetType()->isNullable());
+	  break;
+	case FieldType::DATE:
+	  fit.InitDelimitedDate(offset, 
+				member.GetType()->isNullable());
+	  break;
+	case FieldType::FUNCTION:
+	  throw std::runtime_error("Importing function types not supported");
+	  break;
+	default:
+	  throw std::runtime_error("Importing unknown field type");
+	}
+      }
+      importers.push_back(field_importer_type());
+      importers.back().InitConsumeTerminatedString(delim);
+    }
+    // Optimize this a bit.  Iterate backward to find the
+    // last importer that generates a value (not just consume).
+    // Make one more importer consuming till the end of the line.
+    for(std::size_t i=1; i<=importers.size(); ++i) {
+      if (!importers[importers.size()-i].isConsumeOnly()) {
+	if (i > 2) {
+	  // Last generator is at size - i.  So make the last
+	  // element a consumer at size - i + 1.  Thus new size
+	  // is size-i+2.
+	  importers.resize(importers.size() - i + 2);
+	  importers.back().InitConsumeTerminatedString(recordDelim);
+	}
+	break;
+      }
+    }
+  }
+
+private:
+  typedef bool (FieldImporter::*ImportFunc) (DataBlock& source, RecordBuffer target) const;
+  std::size_t mSourceSize;
+  FieldAddress mTargetOffset;
+  ImportFunc mImporter;
+
+  static const std::vector<ImportFunc>& availableImporters()
+  {
+    static std::vector<ImportFunc> funcs;
+    if (funcs.size() == 0) {
+      funcs.push_back(&FieldImporter::ImportFixedLengthString);
+      funcs.push_back(&FieldImporter::ImportFixedLengthTerminatedString);
+      funcs.push_back(&FieldImporter::ImportVariableLengthTerminatedString);
+      funcs.push_back(&FieldImporter::ImportVariableLengthString);
+      funcs.push_back(&FieldImporter::ConsumeTerminatedString);
+      funcs.push_back(&FieldImporter::ImportDecimalInt32);
+      funcs.push_back(&FieldImporter::ImportDouble);
+      funcs.push_back(&FieldImporter::ImportDelimitedDatetime);
+      funcs.push_back(&FieldImporter::ImportDelimitedDecimal);
+      funcs.push_back(&FieldImporter::ImportDecimalInt64);
+      funcs.push_back(&FieldImporter::ImportDelimitedDate);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportFixedLengthString>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportFixedLengthTerminatedString>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportVariableLengthTerminatedString>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportVariableLengthString>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ConsumeTerminatedString>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDecimalInt32>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDouble>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDatetime>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDecimal>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDecimalInt64>);
+      funcs.push_back(&FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDate>);
+    }
+    return funcs;
+  }
+
+  int getImporterIndex() const
+  {
+    if(mImporter == NULL) return -1;
+    const std::vector<ImportFunc>& funcs(availableImporters());
+    for(std::size_t i=0; i<funcs.size(); ++i) {
+      if (mImporter == funcs[i]) {
+	return i;
+      }
+    }
+    throw std::runtime_error("Unknown importer");
+  }
+  ImportFunc getImporter(int idx)
+  {
+    if (idx==-1) return NULL;
+    const std::vector<ImportFunc>& funcs(availableImporters());
+    if (idx < 0 || (std::size_t) idx >= funcs.size()) {
+      throw std::runtime_error("Invalid importer index");
+    }
+    return funcs[idx];
+  }
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void save(Archive & ar, const unsigned int version) const
+  {
+    int tmp = getImporterIndex();
+    ar & BOOST_SERIALIZATION_NVP(mSourceSize);
+    ar & BOOST_SERIALIZATION_NVP(mTargetOffset);
+    ar & BOOST_SERIALIZATION_NVP(tmp);
+  }
+  template <class Archive>
+  void load(Archive & ar, const unsigned int version) 
+  {
+    int tmp;
+    ar & BOOST_SERIALIZATION_NVP(mSourceSize);
+    ar & BOOST_SERIALIZATION_NVP(mTargetOffset);
+    ar & BOOST_SERIALIZATION_NVP(tmp);
+    mImporter =  getImporter(tmp);
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+
+  static int32_t PrefixStringLength(const char * prefixLength)
+  {
+    int32_t val = (*prefixLength++ - '0') * 1000;
+    val += (*prefixLength++ - '0') * 100;
+    val += (*prefixLength++ - '0') * 10;
+    val += (*prefixLength++ - '0');
+    return val;
+  }
+
+  bool ImportFixedLengthString(DataBlock& source, RecordBuffer target) const
+  {
+    uint8_t * s = source.open(mSourceSize);
+    if (s != NULL) {
+      mTargetOffset.SetFixedLengthString(target, (const char *) s, mSourceSize);
+      source.consume(mSourceSize);
+      return true;
+    }
+    return false;
+  }
+
+  bool ImportFixedLengthTerminatedString(DataBlock& source, RecordBuffer target) const
+  {
+    uint8_t term = ((const FixedLengthPad *) &mSourceSize)->TermChar;
+    uint8_t * s = source.open(1);
+    AutoMark<DataBlock> m(source);
+    while(true) {
+      if (!s) {
+	return false;
+      }
+      if (*s != term) {
+	source.consume(1);
+	s = source.open(1);
+      } else {
+	source.consume(1);
+	break;
+      }
+    }
+
+    // Done reading.  Now the mark is stable.
+    uint8_t * mark = source.getMark();
+    // Check that length isn't too long...
+    if (mark + ((const FixedLengthPad *) &mSourceSize)->Size < s) {
+      return false;
+    }
+
+    // Set the values we have passing in the pad char and the number we need appended.
+    return true;    
+  }
+
+  bool ImportVariableLengthString(DataBlock& source, RecordBuffer target) const
+  {
+    uint8_t * s = source.open(5);
+    if (s != NULL) {
+      int32_t len = PrefixStringLength((char *) s);
+      source.consume(5);
+      s = source.open(len);
+      if (s != NULL) {
+	mTargetOffset.SetVariableLengthString(target, (const char *) s, len);
+	source.consume(len);
+	return true;
+      }
+    }
+    return false;    
+  }
+
+  bool ImportVariableLengthTerminatedString(DataBlock& source, RecordBuffer target) const
+  {
+    // HACK: stuff terminator in mSize since it isn't used otherwise
+    uint8_t term = (uint8_t) mSourceSize;
+    uint8_t * s = source.open(1);
+    AutoMark<DataBlock> m(source);
+    while(true) {
+      if (!s) return false;
+      if (*s != term) {
+	source.consume(1);
+	s = source.open(1);
+      } else {
+	break;
+      }
+    }
+    mTargetOffset.SetVariableLengthString(target, (const char *) source.getMark(), s-source.getMark());
+    return true;
+  }
+
+  bool ConsumeTerminatedString(DataBlock& source, RecordBuffer target) const
+  {
+    // HACK: stuff terminator in mSize since it isn't used otherwise
+    uint8_t term = (uint8_t) mSourceSize;
+    while(true) {      
+      // Open a window bigger than what we might need
+      // to tighten up the inner loop.
+      std::size_t sz = 64;
+      uint8_t * start;
+      source.open(sz, start);
+      if (sz == 0) return false;
+      uint8_t * end = start + sz;
+      uint8_t * s = start;
+      while(s != end) {
+	if (*s++ == term) {
+	  source.consume(std::size_t(s - start));
+	  return true;    
+	}
+      }
+      source.consume(sz);
+    }
+  }
+
+  bool ImportDecimalInt32(DataBlock & source, RecordBuffer target) const
+  {
+    bool neg = false;
+    uint8_t * s = source.open(1);
+    if (s == NULL) 
+      return false;
+    if (*s == '-') {
+      neg = true;
+      source.consume(1);
+    } else if (*s == '+') {
+      source.consume(1);
+    }
+    int32_t val = 0;
+    while(true) {
+      s = source.open(1);
+      if (s == NULL) {
+	return false;
+      }
+      if (*s > '9' || *s < '0')  {
+	// TODO: Right now assuming and not validating a single delimiter character
+	// TODO: Protect against overflow
+	mTargetOffset.setInt32(neg ? -val : val, target);
+	return true;
+      }
+      val = val * 10 + (*s - '0');
+      source.consume(1);
+    }
+  }
+  
+  bool ImportDouble(DataBlock & source, RecordBuffer target) const
+  {
+    uint8_t term = (uint8_t) mSourceSize;
+    uint8_t * s = source.open(1);
+    AutoMark<DataBlock> m(source);
+    while(true) {
+      if (!s) return false;
+      if (*s != term) {
+	source.consume(1);
+	s = source.open(1);
+      } else {
+	break;
+      }
+    }
+
+    mTargetOffset.setDouble(atof((char *) source.getMark()), target);
+    return true;    
+  }
+  
+  bool ImportDelimitedDatetime(DataBlock & source, RecordBuffer target) const
+  {
+    // Importing a fixed format of 19 chars
+    // YYYY-MM-DD hh:mm:ss
+    static const int32_t formatSz = 19;
+    uint8_t * s = source.open(formatSz);
+    if (s == NULL) return false;
+    unsigned short nums[6];
+    nums[0] = 0;
+    for(int i=0; i<4; i++) {
+      if (*s > '9' || *s < '0')  {
+	return false;
+      }
+      nums[0] = nums[0] * 10 + (*s - '0');
+      s++;
+    }
+
+    // Trust the compiler to unroll these loops
+    // appropriately (or trust that it won't do it
+    // if not beneficial).
+    for(int j=1; j<6; j++) {
+      // TODO: Validate delimiter;
+      s++;
+      nums[j] = 0;
+      for(int i=0; i<2; i++) {
+	if (*s > '9' || *s < '0')  {
+	  return false;
+	}
+	nums[j] = nums[j] * 10 + (*s - '0');
+	s++;
+      }
+    }
+    
+    source.consume(formatSz);
+
+    typedef boost::posix_time::ptime ptime;
+    typedef boost::posix_time::time_duration time_duration;
+    typedef boost::gregorian::date date;
+    // This call profiles to be pretty slow.
+    // Can this be improved without losing too much
+    // safety?
+    ptime t(date(nums[0], nums[1], nums[2]),
+    	    time_duration(nums[3],nums[4],nums[5]));
+    mTargetOffset.setDatetime(t, target);
+    return true;    
+  }
+  
+  bool ImportDelimitedDate(DataBlock & source, RecordBuffer target) const
+  {
+    // Importing a fixed format of 10 chars
+    // YYYY-MM-DD
+    static const int32_t formatSz = 10;
+    uint8_t * s = source.open(formatSz);
+    if (s == NULL) return false;
+    unsigned short nums[3];
+    nums[0] = 0;
+    for(int i=0; i<4; i++) {
+      if (*s > '9' || *s < '0')  {
+	return false;
+      }
+      nums[0] = nums[0] * 10 + (*s - '0');
+      s++;
+    }
+
+    // Trust the compiler to unroll these loops
+    // appropriately (or trust that it won't do it
+    // if not beneficial).
+    for(int j=1; j<3; j++) {
+      // TODO: Validate delimiter;
+      s++;
+      nums[j] = 0;
+      for(int i=0; i<2; i++) {
+	if (*s > '9' || *s < '0')  {
+	  return false;
+	}
+	nums[j] = nums[j] * 10 + (*s - '0');
+	s++;
+      }
+    }
+    
+    source.consume(formatSz);
+
+    typedef boost::gregorian::date date;
+    // This call profiles to be pretty slow.
+    // Can this be improved without losing too much
+    // safety?
+    date t(date(nums[0], nums[1], nums[2]));
+    mTargetOffset.setDate(t, target);
+    return true;    
+  }
+  
+  bool ImportDelimitedDecimal(DataBlock & source, RecordBuffer target) const
+  {
+    // decNumber requires null terminated string.
+    // Cost of import is high enough the extra copy into
+    // doesn't appear to be a big deal.
+    char buf[DECIMAL128_String];
+    char * bufptr = &buf[0];
+    char * bufend = &buf[DECIMAL128_String];
+    uint8_t term = (uint8_t) mSourceSize;
+    uint8_t * s = source.open(1);
+    while(true) {
+      if (!s) return false;
+      if (*s != term &&
+	  bufptr != bufend) {
+	*bufptr++ = *s;
+	source.consume(1);
+	s = source.open(1);
+      } else {
+	break;
+      }
+    }
+    // Decimal too long!
+    // TODO: Should be more forgiving here due to 
+    // leading and trailing zeros.
+    if (bufptr == bufend)
+      return false;
+
+    *bufptr = 0;
+
+    decContext decCtxt;
+    decContextDefault(&decCtxt, DEC_INIT_DECIMAL128); // no traps, please
+    decimal128FromString(mTargetOffset.getDecimalPtr(target),
+			 buf,
+			 &decCtxt);
+    mTargetOffset.clearNull(target);
+    return decCtxt.status == 0;
+  }
+
+  bool ImportDecimalInt64(DataBlock & source, RecordBuffer target) const
+  {
+    bool neg = false;
+    uint8_t * s = source.open(1);
+    if (s == NULL) 
+      return false;
+    if (*s == '-') {
+      neg = true;
+      source.consume(1);
+    } else if (*s == '+') {
+      source.consume(1);
+    }
+    int64_t val = 0;
+    while(true) {
+      s = source.open(1);
+      if (s == NULL) {
+	return false;
+      }
+      if (*s > '9' || *s < '0')  {
+	// TODO: Right now assuming and not validating a single delimiter character
+	// TODO: Protect against overflow
+	mTargetOffset.setInt64(neg ? -val : val, target);
+	return true;
+      }
+      val = val * 10LL + (*s - '0');
+      source.consume(1);
+    }
+  }
+  
+  template <ImportFunc PMF>
+  bool ImportNullableField(DataBlock & source, RecordBuffer target) const
+  {
+    // Check for null marker.  Set mark so we can roll back if need be.
+    source.setMark();
+    uint8_t * s = source.open(2);
+    if (s == NULL) {
+      source.releaseMark();
+      return false;
+    }
+    if (s[0] == '\\' && s[1] == 'N') {
+      source.consume(2);
+      source.releaseMark();
+      mTargetOffset.setNull(target);
+      return true;
+    } else {
+      source.rewindMark();
+      return (this->*PMF)(source, target);
+    }
+  }
+
+  struct FixedLengthPad
+  {
+    uint16_t Size;
+    uint8_t TermChar;
+    uint8_t PadChar;
+  };
+
+public:
+  FieldImporter() 
+    :
+    mSourceSize(0),
+    mTargetOffset(0),
+    mImporter(NULL)
+  {
+  }
+
+  void InitFixedLengthString(const FieldAddress& targetOffset, std::size_t sz, bool nullable = false) 
+  {
+    mSourceSize = sz;
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportFixedLengthString>;
+    } else {
+      mImporter = &FieldImporter::ImportFixedLengthString;
+    }
+  }
+
+  void InitFixedLengthTerminatedString(const FieldAddress& targetOffset, 
+				       uint8_t terminator, 
+				       uint8_t padChar, 
+				       uint16_t sz,
+				       bool nullable = false) 
+  {
+    // Use a union
+    FixedLengthPad * hack = (FixedLengthPad *) &mSourceSize;
+    hack->Size = sz;
+    hack->TermChar = terminator;
+    hack->PadChar =padChar;
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportFixedLengthTerminatedString>;
+    } else {
+      mImporter = &FieldImporter::ImportFixedLengthTerminatedString;
+    }
+  }
+
+  void InitVariableLengthString(const FieldAddress& targetOffset, bool nullable=false)
+  {
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportVariableLengthString>;
+    } else {
+      mImporter = &FieldImporter::ImportVariableLengthString;
+    }
+  }
+
+  void InitVariableLengthTerminatedString(const FieldAddress& targetOffset, char terminator, bool nullable=false)
+  {
+    mSourceSize = (uint8_t) terminator;
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportVariableLengthTerminatedString>;
+    } else {
+      mImporter = &FieldImporter::ImportVariableLengthTerminatedString;
+    }
+  }
+
+  void InitConsumeTerminatedString(char terminator)
+  {
+    mSourceSize = (uint8_t) terminator;
+    mImporter = &FieldImporter::ConsumeTerminatedString;
+  }
+
+  void InitDecimalInt32(const FieldAddress& targetOffset, bool nullable = false)
+  {
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDecimalInt32>;
+    } else {
+      mImporter = &FieldImporter::ImportDecimalInt32;
+    }
+  }
+
+  void InitDouble(const FieldAddress& targetOffset, char terminator, bool nullable = false)
+  {
+    mSourceSize = (uint8_t) terminator;
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDouble>;
+    } else {
+      mImporter = &FieldImporter::ImportDouble;
+    }
+  }
+
+  void InitDelimitedDatetime(const FieldAddress& targetOffset, bool nullable = false)
+  {
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDatetime>;
+    } else {
+      mImporter = &FieldImporter::ImportDelimitedDatetime;
+    }
+  }
+
+  void InitDelimitedDate(const FieldAddress& targetOffset, bool nullable = false)
+  {
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDate>;
+    } else {
+      mImporter = &FieldImporter::ImportDelimitedDate;
+    }
+  }
+
+  void InitDelimitedDecimal(const FieldAddress& targetOffset, char terminator, 
+			    bool nullable)
+  {
+    mSourceSize = (uint8_t) terminator;
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDelimitedDecimal>;
+    } else {
+      mImporter = &FieldImporter::ImportDelimitedDecimal;
+    }
+  }
+
+  void InitDecimalInt64(const FieldAddress& targetOffset, bool nullable=false)
+  {
+    mTargetOffset = targetOffset;
+    if (nullable) {
+      mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportDecimalInt64>;
+    } else {
+      mImporter = &FieldImporter::ImportDecimalInt64;
+    }
+  }
+  
+  bool isConsumeOnly() const 
+  {
+    return mImporter == &FieldImporter::ConsumeTerminatedString;
+  }
+
+  bool Import(DataBlock & source, RecordBuffer target) const
+  {
+    if (mImporter == NULL) {
+      throw std::runtime_error("Importer not initialized");
+    }
+    return (this->*mImporter)(source, target);
+  }
+};
+  
+// Factory for creating DataBlock instances.
+class DataBlockFactory : public boost::noncopyable
+{
+public:
+  typedef class DataBlock * 
+  (*CreateDataBlockFn) (const char *, int32_t, uint64_t, uint64_t);
+private:
+  boost::mutex * mGuard;
+  std::map<std::string, CreateDataBlockFn> mCreators;
+  DataBlockFactory();
+  ~DataBlockFactory();
+public:
+  static DataBlockFactory& get();
+  void registerCreator(const std::string& uriScheme, 
+		       CreateDataBlockFn creator);
+  class DataBlock * create(const char * file, 
+			   int32_t targetBlockSize, 
+			   uint64_t beginOffset,
+			   uint64_t endOffset);
+
 };
 
 /**
@@ -1411,8 +1410,8 @@ class GenericParserOperatorType : public RuntimeOperatorType
 public:
   typedef _ChunkStrategy chunk_strategy_type;
   typedef typename _ChunkStrategy::file_input file_input_type;
-  typedef FieldImporter<DataBlock> field_importer_type;
-  typedef typename std::vector<FieldImporter<DataBlock> >::const_iterator field_importer_const_iterator;
+  typedef FieldImporter field_importer_type;
+  typedef std::vector<FieldImporter >::const_iterator field_importer_const_iterator;
   typedef DataBlock input_buffer_type;
 
   // What file(s) am I parsing?
