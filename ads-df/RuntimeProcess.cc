@@ -1488,7 +1488,9 @@ int PlanRunner::run(int argc, char ** argv)
 			   timeout);
   } else {
     std::string inputFile(vm["file"].as<std::string>());
-    checkRegularFileExists(inputFile);
+    if (!boost::algorithm::equals(inputFile, "-")) {
+      checkRegularFileExists(inputFile);
+    }
     int32_t partitions=1;
     if (vm.count("partitions")) {
       partitions = vm["partitions"].as<int32_t>();
