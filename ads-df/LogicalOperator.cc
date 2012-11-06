@@ -329,7 +329,9 @@ void LogicalOperator::checkGraph(PlanCheckContext& log)
   }
 }
 
-LogicalPlan::LogicalPlan()
+LogicalPlan::LogicalPlan(PlanCheckContext& ctxt)
+  :
+  mContext(ctxt)
 {
 }
 

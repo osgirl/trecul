@@ -286,7 +286,7 @@ class LogicalPlan
 private:
   std::vector<LogicalOperator*> mOperators;
   std::vector<LogicalFifo *> mFifos;
-  PlanCheckContext mContext;
+  PlanCheckContext& mContext;
 public:
   typedef std::vector<LogicalOperator*>::const_iterator const_operator_iterator;
   typedef std::vector<LogicalOperator*>::iterator operator_iterator;
@@ -305,7 +305,7 @@ public:
   typedef std::vector<edge_descriptor>::size_type degree_size_type;
   typedef void adjacency_iterator;
 
-  LogicalPlan();
+  LogicalPlan(PlanCheckContext& ctxt);
   ~LogicalPlan();
 
   std::size_t numOperators() const

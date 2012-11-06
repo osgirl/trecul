@@ -62,8 +62,7 @@ public:
   static boost::shared_ptr<RuntimeOperatorPlan> deserialize64(const char * p,
 							      std::size_t sz);
   virtual ~PlanGenerator() {}
-  virtual boost::shared_ptr<RuntimeOperatorPlan> create(class DynamicRecordContext& ctxt,
-							int32_t numPartitions) =0;
+  virtual boost::shared_ptr<RuntimeOperatorPlan> create(int32_t numPartitions) =0;
 };
 
 /**
@@ -77,7 +76,7 @@ private:
   LogicalPlan * mPlan;
   LogicalOperator * mCurrentOp;
 public:
-  DataflowGraphBuilder();
+  DataflowGraphBuilder(class PlanCheckContext& ctxt);
   ~DataflowGraphBuilder();
   
   void buildGraph(const std::string& str);
@@ -101,8 +100,7 @@ public:
   }
 
   // Create the runtime plan from the graph
-  boost::shared_ptr<RuntimeOperatorPlan> create(class DynamicRecordContext& ctxt,
-						int32_t numPartitions);
+  boost::shared_ptr<RuntimeOperatorPlan> create(int32_t numPartitions);
 };
 
 

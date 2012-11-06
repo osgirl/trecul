@@ -102,19 +102,19 @@ public:
 BOOST_AUTO_TEST_CASE(testInputQueueOperator)
 {
   std::cout << "testInputQueueOperator" << std::endl;
-  DynamicRecordContext ctxt;
+  PlanCheckContext ctxt;
   std::vector<RecordMember> members;
   members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("b", Int32Type::Get(ctxt)));
   const RecordType * recordType = RecordType::get(ctxt, members);
-  DataflowGraphBuilder gb;
+  DataflowGraphBuilder gb(ctxt);
   gb.buildGraph("a = reduce[format=\"a INTEGER, b INTEGER\"];\n"
 		"b = print[numToPrint=10];\n"
 		"c = devNull[];\n"
 		"a -> b;\n"
 		"b -> c;\n"
 		);
-  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, 1);
+  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(1);
   RuntimeProcess p(0,0,1,*plan.get());
   std::vector<NativeInputQueueOperator*> ops;
   p.getOperatorOfType<>(ops);
@@ -2322,7 +2322,8 @@ BOOST_AUTO_TEST_CASE(testSortMerge)
 BOOST_AUTO_TEST_CASE(testSort)
 {
   std::cout << "testSort" << std::endl;
-  DataflowGraphBuilder gb;
+  PlanCheckContext ctxt;
+  DataflowGraphBuilder gb(ctxt);
   gb.buildGraph("a = generate[output=\"100 - 2*RECORDCOUNT AS a\", numRecords=10];\n"
 		"b = sort[key=\"a\"];\n"
 		"c = print[numToPrint=10];\n"
@@ -2331,8 +2332,7 @@ BOOST_AUTO_TEST_CASE(testSort)
 		"b -> c;\n"
 		"c -> d;\n"
 		);
-  DynamicRecordContext ctxt;
-  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, 1);
+  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(1);
   RuntimeProcess p(0,0,1,*plan.get());
   p.run();
 }

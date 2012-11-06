@@ -1094,10 +1094,10 @@ void PlanRunner::createSerialized64PlanFromFile(const std::string& f,
 						int32_t partitions,
 						std::string& p)
 {
-  DynamicRecordContext ctxt;
-  DataflowGraphBuilder gb;
+  PlanCheckContext ctxt;
+  DataflowGraphBuilder gb(ctxt);
   gb.buildGraphFromFile(f);  
-  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, partitions);
+  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(partitions);
   p = PlanGenerator::serialize64(plan);
 }
 
@@ -1106,10 +1106,10 @@ void PlanRunner::createSerialized64MapPlan(const std::string& f,
 					   std::string& emitFormat,
 					   std::string& p)
 {
-  DynamicRecordContext ctxt;
-  DataflowGraphBuilder gb;
+  PlanCheckContext ctxt;
+  DataflowGraphBuilder gb(ctxt);
   gb.buildGraph(f);  
-  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, partitions);
+  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(partitions);
   p = PlanGenerator::serialize64(plan);
   // Now that plan is checked we can scrape up the output
   // format of any emit operator so that it can be fed to
@@ -1129,8 +1129,8 @@ void PlanRunner::createSerialized64ReducePlan(const std::string& f,
 					      const std::string& defaultReduceFormat,
 					      std::string& p)
 {
-  DynamicRecordContext ctxt;
-  DataflowGraphBuilder gb;
+  PlanCheckContext ctxt;
+  DataflowGraphBuilder gb(ctxt);
   gb.buildGraph(f);  
   if (defaultReduceFormat.size()) {
     std::vector<LogicalInputQueue *> reduceOp;
@@ -1142,7 +1142,7 @@ void PlanRunner::createSerialized64ReducePlan(const std::string& f,
       reduceOp[0]->setStringFormat(defaultReduceFormat);
     }
   }
-  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, partitions);
+  boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(partitions);
   p = PlanGenerator::serialize64(plan);
 }
 
@@ -1502,10 +1502,10 @@ int PlanRunner::run(int argc, char ** argv)
     // Make sure partitions is at least as large as partition+1;
     if (partition >= partitions)
       partitions = partition+1;
-    DataflowGraphBuilder gb;
+    PlanCheckContext ctxt;
+    DataflowGraphBuilder gb(ctxt);
     gb.buildGraphFromFile(inputFile);
-    DynamicRecordContext ctxt;
-    boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(ctxt, partitions);
+    boost::shared_ptr<RuntimeOperatorPlan> plan = gb.create(partitions);
     RuntimeProcess p(partition,partition,partitions,*plan.get());
     p.run();
     return 0;

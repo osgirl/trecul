@@ -279,9 +279,9 @@ boost::shared_ptr<RuntimeOperatorPlan> PlanGenerator::deserialize64(const char *
   return boost::shared_ptr<RuntimeOperatorPlan>(tmp);
 }
 
-DataflowGraphBuilder::DataflowGraphBuilder()
+DataflowGraphBuilder::DataflowGraphBuilder(PlanCheckContext & ctxt)
   :
-  mPlan(new LogicalPlan()),
+  mPlan(new LogicalPlan(ctxt)),
   mCurrentOp(NULL)
 {
 }
@@ -422,8 +422,7 @@ void DataflowGraphBuilder::edgeBuild(const char * from,
 		 mOps.find(to)->second);
 }
 
-boost::shared_ptr<RuntimeOperatorPlan> DataflowGraphBuilder::create(class DynamicRecordContext& ctxt,
-							       int32_t numPartitions)
+boost::shared_ptr<RuntimeOperatorPlan> DataflowGraphBuilder::create(int32_t numPartitions)
 {
   mPlan->check();
 
