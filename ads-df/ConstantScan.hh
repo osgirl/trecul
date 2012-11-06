@@ -35,6 +35,7 @@
 #ifndef __CONSTANT_SCAN_HH__
 #define __CONSTANT_SCAN_HH__
 
+#include "LogicalOperator.hh"
 #include "RuntimeOperator.hh"
 
 class RuntimeConstantScanOperatorType : public RuntimeOperatorType
@@ -64,6 +65,15 @@ public:
   RuntimeOperator * create(RuntimeOperator::Services & s) const;
 };
 
+class LogicalConstantSink : public LogicalOperator
+{
+public:
+  LogicalConstantSink();
+  ~LogicalConstantSink();
+  void check(PlanCheckContext& log);
+  void create(class RuntimePlanBuilder& plan);  
+};
+
 /**
  * A sink operator that stores record stream.  Useful for coordination
  * applications in which multiple dataflows need to be executed and we don't
@@ -73,6 +83,7 @@ class RuntimeConstantSinkOperatorType : public RuntimeOperatorType
 {
   friend class RuntimeConstantSinkOperator;
 private:
+  const RecordType * mInput;
   // This is only safe when run in a single plan!!!!
   std::vector<RecordBuffer> mSink;
   RecordTypeFree mFree;
@@ -85,6 +96,7 @@ public:
   ~RuntimeConstantSinkOperatorType();
   RuntimeOperator * create(RuntimeOperator::Services & s) const;
   const std::vector<RecordBuffer>& getSink() const { return mSink; }
+  const RecordType * getInput() const { return mInput; }
 };
 
 #endif

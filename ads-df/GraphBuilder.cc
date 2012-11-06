@@ -318,7 +318,9 @@ void DataflowGraphBuilder::nodeStart(const char * type,
   if (mOps.find(name) != mOps.end()) {
     throw std::runtime_error((boost::format("Operator with name %1% already defined") % name).str());
   }
-  if (boost::algorithm::iequals("copy", type)) {
+  if (boost::algorithm::iequals("constant_sink", type)) {
+    mCurrentOp = new LogicalConstantSink();
+  } else if (boost::algorithm::iequals("copy", type)) {
     mCurrentOp = new CopyOp();
   } else if (boost::algorithm::iequals("emit", type)) {
     mCurrentOp = new LogicalEmit();

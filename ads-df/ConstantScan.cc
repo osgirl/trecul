@@ -227,8 +227,31 @@ void RuntimeConstantSinkOperator::shutdown()
 {
 }
 
+LogicalConstantSink::LogicalConstantSink()
+  :
+  LogicalOperator(1,1,0,0)
+{
+}
+
+LogicalConstantSink::~LogicalConstantSink()
+{
+}
+
+void LogicalConstantSink::check(PlanCheckContext& log)
+{
+}
+
+void LogicalConstantSink::create(class RuntimePlanBuilder& plan)
+{
+  RuntimeOperatorType * opType = 
+    new RuntimeConstantSinkOperatorType(getInput(0)->getRecordType());
+  plan.addOperatorType(opType);
+  plan.mapInputPort(this, 0, opType, 0);  
+}
+
 RuntimeConstantSinkOperatorType::RuntimeConstantSinkOperatorType(const RecordType * input)
   :
+  mInput(input),
   mFree(input->getFree())
 {
 }
