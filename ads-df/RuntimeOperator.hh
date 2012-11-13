@@ -1749,6 +1749,14 @@ public:
 	   const std::string& transfer,
 	   bool joinOne=false);
   HashJoin(DynamicRecordContext & ctxt,
+	   HashJoin::JoinType joinType,
+	   const RecordType * tableInput,
+	   const RecordType * probeInput,
+	   const std::string& tableKey,
+	   const std::string& probeKey,
+	   const std::string& residual,
+	   const std::string& transfer);
+  HashJoin(DynamicRecordContext & ctxt,
 	   const RecordType * tableInput,
 	   const RecordType * probeInput,
 	   const std::vector<std::string>& tableKeys,

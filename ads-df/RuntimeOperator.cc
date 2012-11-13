@@ -1938,6 +1938,35 @@ HashJoin::HashJoin(DynamicRecordContext & ctxt,
 }
 
 HashJoin::HashJoin(DynamicRecordContext & ctxt,
+		   HashJoin::JoinType joinType,
+		   const RecordType * tableInput,
+		   const RecordType * probeInput,
+		   const std::string& tableKey,
+		   const std::string& probeKey,
+		   const std::string& residual,
+		   const std::string& transfer
+		   )
+  :
+  mTableInput(tableInput),
+  mProbeInput(probeInput),
+  mTableHash(NULL),
+  mProbeHash(NULL),
+  mEq(NULL),
+  mTransfer(NULL),
+  mSemiJoinTransfer(NULL),
+  mProbeMakeNullableTransfer(NULL),
+  mTableMakeNullableTransfer(NULL),  
+  mJoinType(joinType),
+  mJoinOne(false)
+{
+  std::vector<std::string> tableKeys;
+  std::vector<std::string> probeKeys;
+  if (tableKey.size()) tableKeys.push_back(tableKey);
+  if (probeKey.size()) probeKeys.push_back(probeKey);
+  init(ctxt, tableKeys, probeKeys, residual, transfer);
+}
+
+HashJoin::HashJoin(DynamicRecordContext & ctxt,
 		   const RecordType * tableInput,
 		   const RecordType * probeInput,
 		   const std::vector<std::string>& tableKeys,
@@ -2007,10 +2036,23 @@ void HashJoin::init(DynamicRecordContext & ctxt,
       }
       // Value of hash functions are type dependent so we must
       // be cognizant of implicit type conversions.
+      if (!mProbeInput->hasMember(probeKeys[i])) {
+	throw std::runtime_error((boost::format("probe input missing join key %1%")
+				  % probeKeys[i]).str());
+      }
+      if (!mTableInput->hasMember(tableKeys[i])) {
+	throw std::runtime_error((boost::format("table input missing join key %1%")
+				  % tableKeys[i]).str());
+      }
       const FieldType * probeType = mProbeInput->getMember(probeKeys[i]).GetType();
       const FieldType * tableType = mTableInput->getMember(tableKeys[i]).GetType();
       const FieldType * targetType = 
 	typeCheckCtxt.leastCommonTypeNullable(probeType, tableType);
+      if (targetType == NULL) {
+	throw std::runtime_error((boost::format("Error generating conversion of"
+						"join key %1% to join key %2%") %
+				  probeKeys[i] % tableKeys[i]).str());
+      }
       if (targetType->GetEnum() != tableType->GetEnum()) {
 	tableKey += (boost::format("CAST(%1% AS %2%)") % tableKeys[i] %
 		     targetType->toString()).str();
