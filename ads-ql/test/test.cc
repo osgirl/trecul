@@ -3313,6 +3313,29 @@ BOOST_AUTO_TEST_CASE(testIQLRecordAggregateWithCase3)
 			  false, 3);
 }
 
+BOOST_AUTO_TEST_CASE(testIQLRecordAggregateWithInvalidGlob)
+{
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
+  members.push_back(RecordMember("b", Int32Type::Get(ctxt)));
+  members.push_back(RecordMember("c", Int32Type::Get(ctxt)));
+  boost::shared_ptr<RecordType> recordType(new RecordType(members));
+  
+  // Simple Transfer of everything.  
+  std::vector<std::string> groupKeys;
+  groupKeys.push_back("a");
+  try {
+    RecordTypeAggregate a1(ctxt, "agg1", 
+			   recordType.get(), 
+			   "input.*",
+			   groupKeys);
+    BOOST_CHECK(false);
+  } catch(std::exception& ex) {
+    std::cout << "Received expected exception: " << ex.what() << std::endl;
+  }
+}
+
 RecordBuffer createSimpleLogInputRecord(boost::shared_ptr<RecordType> recordType)
 {
   RecordBuffer inputBuf = recordType->GetMalloc()->malloc();

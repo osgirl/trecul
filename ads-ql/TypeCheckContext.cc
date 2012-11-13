@@ -900,6 +900,8 @@ void TypeCheckContext::addFields(const char * recordName)
   for(RecordType::const_member_iterator mit = it->second->begin_members();
       mit != it->second->end_members();
       ++mit) {
+    // Make sure the member is valid to reference
+    buildVariableRef(recordName, mit->GetName().c_str());
     mRecordMembers->push_back(*mit);
   }
 }
