@@ -1,0 +1,6 @@
+g1 = generate[output="RECORDCOUNT AS a", numRecords=3];
+g2 = generate[output="a, RECORDCOUNT AS b", numRecords="CAST(2*a +1 AS INTEGER)"];
+g1 -> g2;
+
+w = write[file="output.txt", formatFile="format.txt", mode="text"];
+g2 -> w;

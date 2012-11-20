@@ -1,0 +1,4 @@
+g = generate[output="RECORDCOUNT AS a, CAST(RECORDCOUNT AS INTEGER) AS b, CAST(RECORDCOUNT AS DECIMAL) AS c, CASE WHEN RECORDCOUNT % 2 <> 0 THEN 'odd' ELSE 'even' END AS d"];
+
+w = write[file="output.txt", formatFile="format.txt", mode="text"];
+g -> w;

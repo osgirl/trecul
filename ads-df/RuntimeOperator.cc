@@ -34,6 +34,7 @@
 
 #include <iostream>
 #include <boost/algorithm/string.hpp>
+#include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 #include "RuntimeOperator.hh"
 #include "IQLInterpreter.hh"
@@ -204,6 +205,53 @@ RecordTypeFunction * LessThanFunction::get(DynamicRecordContext & ctxt,
 				eqTypes, 
 				eqPred);
 }
+
+RecordTypeFunction * 
+CompareFunction::get(DynamicRecordContext & ctxt,
+		     const RecordType * lhs,
+		     const RecordType * rhs,
+		     const std::vector<SortKey>& leftFields,
+		     const std::vector<SortKey>& rightFields,
+		     const std::string& name)
+{
+  std::vector<AliasedRecordType> eqTypes;
+  eqTypes.push_back(AliasedRecordType("input0", lhs));
+  eqTypes.push_back(AliasedRecordType("input1", rhs));
+  // This is kinda hacky.  When we compare two records to each other,
+  // we need to refer to one field from each record.  Since we do this
+  // by name, we generate a temporary prefix.
+  std::string eqPred;
+  for(std::size_t i=0; i<leftFields.size(); i++) {
+    const RecordMember& leftMember(lhs->getMember(leftFields[i].getName()));
+    const RecordMember& rightMember(rhs->getMember(rightFields[i].getName()));
+    if (leftFields[i].getOrder() != rightFields[i].getOrder()) {
+      throw std::runtime_error((boost::format("Cannot compare fields %1% and %2% which have "
+					      "different sort order") % leftFields[i].getName()
+				% rightFields[i].getName()).str());
+    }
+    std::string leftNullability = leftMember.GetType()->isNullable() ?
+      (boost::format("input0.%1% IS NULL OR ") % leftFields[i].getName()).str() : "";
+    std::string rightNullability = rightMember.GetType()->isNullable() ?
+      (boost::format("input1.%1% IS NULL OR ") % rightFields[i].getName()).str() : "";
+    eqPred += (boost::format("CASE WHEN %3%input0.%1% %5% input1.%2% THEN -1 ELSE "
+			     "CASE WHEN %4%input0.%1% %6% input1.%2% THEN 1 ELSE ") % 
+	       leftFields[i].getName() % rightFields[i].getName() % 
+	       (QueryOptions::nullsSortLow() ? leftNullability : rightNullability) % 
+	       (QueryOptions::nullsSortLow() ? rightNullability : leftNullability) %
+	       (leftFields[i].getOrder() == SortKey::ASC ? "<" : ">") %
+	       (leftFields[i].getOrder() == SortKey::ASC ? ">" : "<")).str();
+  }
+  // Terminate with a 0 : this is equals
+  eqPred += "0 END END";
+  for(std::size_t i=1; i<leftFields.size(); i++) {
+    eqPred += " END END";
+  }
+
+  return new RecordTypeFunction(ctxt, "xfer5eq", 
+				eqTypes, 
+				eqPred);
+}
+
 
 RecordTypeFunction * 
 SortKeyPrefixFunction::get(DynamicRecordContext & ctxt,
@@ -855,9 +903,10 @@ void RuntimePrintOperator::shutdown()
 
 LogicalGenerate::LogicalGenerate()
   :
-  LogicalOperator(0,0,1,1),
-  mNumRecords(10),
+  LogicalOperator(0,1,1,1),
+  mInputType(NULL),
   mStateType(NULL),
+  mNumRecords(NULL),
   mTransfer(NULL)
 {
 }
@@ -865,73 +914,133 @@ LogicalGenerate::LogicalGenerate()
 LogicalGenerate::~LogicalGenerate()
 {
   delete mTransfer;
+  delete mNumRecords;
+}
+
+void LogicalGenerate::init(PlanCheckContext& ctxt,
+			   const std::string& output,
+			   const std::string& numRecords,
+			   const RecordType * input)
+{
+  // Validate that number of records type checks against input
+  // taken to be empty if there is no input
+  if (input == NULL) {
+    std::vector<RecordMember> empty;
+    mInputType = RecordType::get(ctxt, empty);
+  } else {
+    mInputType = input;
+  }
+
+  // Create the state type here.
+  std::vector<RecordMember> members;
+  const RecordType * emptyTy = RecordType::get(ctxt, members);
+  members.push_back(RecordMember("RECORDCOUNT", Int64Type::Get(ctxt)));
+  members.push_back(RecordMember("PARTITIONCOUNT", Int32Type::Get(ctxt)));
+  members.push_back(RecordMember("PARTITION", Int32Type::Get(ctxt)));
+  mStateType = RecordType::get(ctxt, members);
+  std::vector<AliasedRecordType> inputAndState;
+  inputAndState.push_back(AliasedRecordType("input", mInputType));
+  inputAndState.push_back(AliasedRecordType("state", mStateType));
+  mTransfer = new RecordTypeTransfer2(ctxt, "myGenerate", inputAndState, output);
+  std::vector<AliasedRecordType> inputOnly;
+  inputOnly.push_back(AliasedRecordType("input", mInputType));
+  inputOnly.push_back(AliasedRecordType("empty", emptyTy));
+  mNumRecords = new RecordTypeFunction(ctxt, "genLoopUpperBound", inputOnly, numRecords);
+}
+
+const RecordType * LogicalGenerate::getTarget()
+{
+  return mTransfer->getTarget();
 }
 
 void LogicalGenerate::check(PlanCheckContext& ctxt)
 {
   // Validate the parameters
+  std::string output;
+  std::string numRecords;
   for(const_param_iterator it = begin_params();
       it != end_params();
       ++it) {
     if (boost::algorithm::iequals(it->Name, "program") ||
 	boost::algorithm::iequals(it->Name, "output")) {
-      mProgram = boost::get<std::string>(it->Value);
-    } else if (boost::algorithm::iequals(it->Name, "numRecords")) {
-      mNumRecords = boost::get<int32_t>(it->Value);
+      output = boost::get<std::string>(it->Value);
+    } else if (boost::algorithm::iequals(it->Name, "numRecords") ||
+	       boost::algorithm::iequals(it->Name, "limit")) {
+      try { 
+	numRecords = boost::lexical_cast<std::string>(boost::get<int32_t>(it->Value));
+      } catch(boost::bad_get & ) {	
+	try { 
+	  numRecords = boost::get<std::string>(it->Value);
+	} catch(boost::bad_get & ) {
+	  ctxt.logError(*this, "numRecords argument must be integer or string");
+	}
+      }
     } else {
       checkDefaultParam(*it);
     }
   }
 
-  // Create the state type here.
-  std::vector<RecordMember> members;
-  members.push_back(RecordMember("RECORDCOUNT", Int64Type::Get(ctxt)));
-  members.push_back(RecordMember("PARTITIONCOUNT", Int32Type::Get(ctxt)));
-  members.push_back(RecordMember("PARTITION", Int32Type::Get(ctxt)));
-  mStateType = RecordType::get(ctxt, members);
-  mTransfer = new RecordTypeTransfer(ctxt, "myGenerate", mStateType, mProgram);
+  // Default is 10 records
+  if (numRecords.size() == 0) {
+    numRecords = "10";
+  }
+
+  init(ctxt, output, numRecords, 
+       size_inputs() ? getInput(0)->getRecordType() : NULL);
 
   getOutput(0)->setRecordType(mTransfer->getTarget());
 }
 
+RuntimeOperatorType * LogicalGenerate::create()
+{
+   return new RuntimeGenerateOperatorType("generate",
+					  mInputType,
+					  mStateType,
+					  mTransfer,
+					  mNumRecords);
+}
+
 void LogicalGenerate::create(class RuntimePlanBuilder& plan)
 {
-  RuntimeOperatorType * opType = new RuntimeGenerateOperatorType("generate",
-								 mStateType,
-								 mTransfer,
-								 mNumRecords);
+  RuntimeOperatorType * opType = create();
   plan.addOperatorType(opType);
+  if (size_inputs()) {
+    plan.mapInputPort(this, 0, opType, 0);  
+  }
   plan.mapOutputPort(this, 0, opType, 0);  
 }
 
 RuntimeGenerateOperatorType::RuntimeGenerateOperatorType(const std::string& name,
+							 const RecordType * inputType,
 							 const RecordType * stateType,
-							 RecordTypeTransfer * transfer,
-							 int64_t upperBound)
+							 RecordTypeTransfer2 * transfer,
+							 RecordTypeFunction * upperBound)
   :
   RuntimeOperatorType(name.c_str()),
-  mLoopUpperBound(upperBound),
+  mRecordCount(stateType->getFieldAddress("RECORDCOUNT")),
+  mPartitionCount(stateType->getFieldAddress("PARTITIONCOUNT")),
+  mPartition(stateType->getFieldAddress("PARTITION")),
+  mLoopUpperBound(upperBound->create()),
+  mStateMalloc(stateType->getMalloc()),
+  mStateFree(stateType->getFree()),
+  mInputFree(inputType->getFree()),
   mTransfer(NULL),
-  mModule(NULL)
+  mModule(transfer->create())
 {
-  mRecordCount = stateType->getFieldAddress("RECORDCOUNT");
-  mPartitionCount = stateType->getFieldAddress("PARTITIONCOUNT");
-  mPartition = stateType->getFieldAddress("PARTITION");
-  mStateMalloc = stateType->getMalloc();
-  mStateFree = stateType->getFree();
-
-  mModule = transfer->create();
 }
 
-RuntimeGenerateOperatorType::RuntimeGenerateOperatorType(DynamicRecordContext & ctxt, const std::string & prog, int64_t upperBound)
+RuntimeGenerateOperatorType::RuntimeGenerateOperatorType(DynamicRecordContext & ctxt, 
+							 const std::string & prog, 
+							 int64_t upperBound)
   :
   RuntimeOperatorType("RuntimeGenerateOperatorType"),
-  mLoopUpperBound(upperBound),
+  mLoopUpperBound(NULL),
   mTransfer(NULL),
   mModule(NULL)
 {
   // Create the state type here.
   std::vector<RecordMember> members;
+  RecordType emptyType(members);
   members.push_back(RecordMember("RECORDCOUNT", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("PARTITIONCOUNT", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("PARTITION", Int32Type::Get(ctxt)));
@@ -941,9 +1050,16 @@ RuntimeGenerateOperatorType::RuntimeGenerateOperatorType(DynamicRecordContext & 
   mPartition = stateType.getFieldAddress("PARTITION");
   mStateMalloc = stateType.getMalloc();
   mStateFree = stateType.getFree();
+  mInputFree = emptyType.getFree();
+  std::vector<AliasedRecordType> inputAndState;
+  inputAndState.push_back(AliasedRecordType("input", &emptyType));
+  RecordTypeFunction f(ctxt, "myLoopUpperBound", inputAndState, 
+		       boost::lexical_cast<std::string>(upperBound));
+  inputAndState.push_back(AliasedRecordType("state", &stateType));
 
-  mTransfer = new RecordTypeTransfer(ctxt, "myGenerate", &stateType, prog);
+  mTransfer = new RecordTypeTransfer2(ctxt, "myGenerate", inputAndState, prog);
   mModule = mTransfer->create();
+  mLoopUpperBound = f.create();
 }
 
 RuntimeGenerateOperatorType::~RuntimeGenerateOperatorType()
@@ -994,24 +1110,49 @@ void RuntimeGenerateOperator::onEvent(RuntimePort * port)
 {
   switch(mState) {
   case START:
+    // If we have an input, read it
     while(true) {
-      requestWrite(0);
-      mState = WRITE;
-      return;
-    case WRITE: 
-      {
-	int64_t cnt = getGenerateType().mRecordCount.getInt64(mStateRecord);
-	if (cnt < getGenerateType().mLoopUpperBound) {
-	  RecordBuffer output;
-	  getGenerateType().mModule->execute(mStateRecord, output, mRuntimeContext, false);
-	  write(port, output, false);
-	  getGenerateType().mRecordCount.setInt64(cnt + 1, mStateRecord);
-	} else {
-	  write(port, RecordBuffer(NULL), true);
+      if (getNumInputs() == 1) {
+	requestRead(0);
+	mState = READ;
+	return;
+      case READ:
+	read(port, mInput);
+	if (RecordBuffer::isEOS(mInput)) {
 	  break;
 	}
+      } else {
+	mInput = RecordBuffer();
+      }
+      mEnd = getGenerateType().mLoopUpperBound->execute(mInput, RecordBuffer(), 
+							mRuntimeContext);
+      for(mIter=0; mIter<mEnd; ++mIter) {
+	requestWrite(0);
+	mState = WRITE;
+	return;
+      case WRITE: 
+	getGenerateType().mRecordCount.setInt64(mIter, mStateRecord);
+	{
+	    RecordBuffer output;
+	    getGenerateType().mModule->execute(mInput, mStateRecord, output, 
+					       mRuntimeContext, false, false);
+	    write(port, output, false);
+	}
+      }
+
+      if (getNumInputs() > 0) {
+	getGenerateType().mInputFree.free(mInput);
+	mInput = RecordBuffer();
+      } else {
+	break;
       }
     }
+    
+    requestWrite(0);
+    mState = WRITE_EOF;
+    return;
+  case WRITE_EOF:
+    write(port, RecordBuffer(), true);
   }
 }
 
@@ -2925,64 +3066,6 @@ RuntimeOperator * RuntimeNondeterministicCollectorOperatorType::create(RuntimeOp
   return new op_type(s, *this);
 }
 
-RecordTypeFunction * SortMergeJoin::createCompareFunction(DynamicRecordContext& ctxt,
-							  const std::vector<std::string>& leftFields,
-							  const RecordType * leftInputType,
-							  const std::vector<std::string>& rightFields,
-							  const RecordType * rightInputType,
-							  const std::string& op)
-{
-  std::vector<const RecordType *> eqTypes;
-  eqTypes.push_back(leftInputType);
-  eqTypes.push_back(rightInputType);
-  std::string eqPred;
-  for(std::size_t i=0; i<leftFields.size(); i++) {
-    if (eqPred.size() > 0) eqPred += " AND ";
-    eqPred += (boost::format("input0.%1% %3% input1.%2%") % leftFields[i] % rightFields[i] % op).str();
-  }
-
-  return new RecordTypeFunction(ctxt, "xfer5eq", 
-				eqTypes, 
-				eqPred);
-}
-
-RecordTypeFunction * SortMergeJoin::createMemcmpFunction(DynamicRecordContext& ctxt,
-							 const std::vector<std::string>& leftFields,
-							 const RecordType * leftInputType,
-							 const std::vector<std::string>& rightFields,
-							 const RecordType * rightInputType)
-{
-  std::vector<const RecordType *> eqTypes;
-  eqTypes.push_back(leftInputType);
-  eqTypes.push_back(rightInputType);
-  // This is kinda hacky.  When we compare two records to each other,
-  // we need to refer to one field from each record.  Since we do this
-  // by name, we generate a temporary prefix.
-  std::string eqPred;
-  for(std::size_t i=0; i<leftFields.size(); i++) {
-    const RecordMember& leftMember(leftInputType->getMember(leftFields[i]));
-    const RecordMember& rightMember(rightInputType->getMember(rightFields[i]));
-    std::string leftNullability = leftMember.GetType()->isNullable() ?
-      (boost::format("input0.%1% IS NULL OR ") % leftFields[i]).str() : "";
-    std::string rightNullability = rightMember.GetType()->isNullable() ?
-      (boost::format("input1.%1% IS NULL OR ") % rightFields[i]).str() : "";
-    eqPred += (boost::format("CASE WHEN %3%input0.%1% < input1.%2% THEN -1 ELSE "
-			     "CASE WHEN %4%input0.%1% > input1.%2% THEN 1 ELSE ") % 
-	       leftFields[i] % rightFields[i] % 
-	       (QueryOptions::nullsSortLow() ? leftNullability : rightNullability) % 
-	       (QueryOptions::nullsSortLow() ? rightNullability : leftNullability)).str();
-  }
-  // Terminate with a 0 : this is equals
-  eqPred += "0 END END";
-  for(std::size_t i=1; i<leftFields.size(); i++) {
-    eqPred += " END END";
-  }
-
-  return new RecordTypeFunction(ctxt, "xfer5eq", 
-				eqTypes, 
-				eqPred);
-}
-
 RecordTypeTransfer * 
 SortMergeJoin::makeNullableTransfer(DynamicRecordContext& ctxt,
 				    const RecordType * input)
@@ -3034,8 +3117,8 @@ SortMergeJoin::SortMergeJoin(DynamicRecordContext & ctxt,
 			     SortMergeJoin::JoinType joinType,
 			     const RecordType * leftInput,
 			     const RecordType * rightInput,
-			     const std::vector<std::string>& leftKeys,
-			     const std::vector<std::string>& rightKeys,
+			     const std::vector<SortKey>& leftKeys,
+			     const std::vector<SortKey>& rightKeys,
 			     const std::string& residual,
 			     const std::string& matchTransfer)
   :
@@ -3055,8 +3138,8 @@ SortMergeJoin::SortMergeJoin(DynamicRecordContext & ctxt,
 }
 
 void SortMergeJoin::init(DynamicRecordContext & ctxt,
-			 const std::vector<std::string>& leftKeys,
-			 const std::vector<std::string>& rightKeys,
+			 const std::vector<SortKey>& leftKeys,
+			 const std::vector<SortKey>& rightKeys,
 			 const std::string& residual,
 			 const std::string& matchTransfer)
 {
@@ -3077,11 +3160,12 @@ void SortMergeJoin::init(DynamicRecordContext & ctxt,
   }
 
   // Create functions for testing equality of left and right keys.
-  mLeftKeyCompare = createEqualityFunction(ctxt, leftKeys, mLeftInput);
-  mRightKeyCompare = createEqualityFunction(ctxt, rightKeys, mRightInput);
-  mLeftRightKeyCompare = createMemcmpFunction(ctxt, 
-					      leftKeys, mLeftInput, 
-					      rightKeys, mRightInput);
+  mLeftKeyCompare = EqualsFunction::get(ctxt, mLeftInput, mLeftInput, leftKeys, "leftEq");
+  mRightKeyCompare = EqualsFunction::get(ctxt, mRightInput, mRightInput, rightKeys, "rightEq");
+  mLeftRightKeyCompare = CompareFunction::get(ctxt, 
+					      mLeftInput, mRightInput,
+					      leftKeys, rightKeys, 
+					      "compareLeftRight");
   // Create the residual predicate
   if (residual.size()) {
     std::vector<AliasedRecordType> residualTypes;
@@ -3135,8 +3219,8 @@ const RecordType * SortMergeJoin::getOutputType() const
 
 void SortMergeJoin::check(PlanCheckContext& ctxt)
 {
-  std::vector<std::string> leftKeys;
-  std::vector<std::string> rightKeys;
+  std::vector<SortKey> leftKeys;
+  std::vector<SortKey> rightKeys;
   std::string residual;
   std::string transfer;
 
@@ -3145,9 +3229,9 @@ void SortMergeJoin::check(PlanCheckContext& ctxt)
       it != end_params();
       ++it) {
     if (boost::algorithm::iequals(it->Name, "leftKey")) {
-      leftKeys.push_back(boost::get<std::string>(it->Value));
+      leftKeys.push_back(SortKey(boost::get<std::string>(it->Value)));
     } else if (boost::algorithm::iequals(it->Name, "rightKey")) {
-      rightKeys.push_back(boost::get<std::string>(it->Value));
+      rightKeys.push_back(SortKey(boost::get<std::string>(it->Value)));
     } else if (boost::algorithm::iequals(it->Name, "residual") ||
 	       boost::algorithm::iequals(it->Name, "where")) {
       residual = boost::get<std::string>(it->Value);
@@ -3675,21 +3759,22 @@ RuntimeOperator * RuntimeUnionAllOperatorType::create(RuntimeOperator::Services 
 LogicalUnpivot::LogicalUnpivot()
   :
   LogicalOperator(1,1,1,1),
-  mStateType(NULL),
-  mConstantScan(NULL),
-  mTransfer(NULL),
-  mNumPivotColumns(0LL)
+  mGenerator(NULL),
+  mCrossJoin(NULL)
 {
 }
 
 LogicalUnpivot::~LogicalUnpivot()
 {
-  delete mConstantScan;
-  delete mTransfer;
+  delete mGenerator;
+  delete mCrossJoin;
 }
 
 void LogicalUnpivot::check(PlanCheckContext& ctxt)
 {
+  // Number of columns that are being unpivoted.
+  int64_t numPivotColumns;
+  
   if (size_inputs() != 1) {
   } 
   if (getInput(0)->getRecordType() == NULL) {
@@ -3726,7 +3811,7 @@ void LogicalUnpivot::check(PlanCheckContext& ctxt)
   // Comma delimited list of non-pivot columns
   std::string nonPivotColumns;
   // Number of different values we are unpivoting
-  mNumPivotColumns=0;
+  numPivotColumns=0;
   // Iterate through the columns and match.
   // If there are subpatterns, use these as the
   // pivot columns.  The names for the pivot
@@ -3746,7 +3831,7 @@ void LogicalUnpivot::check(PlanCheckContext& ctxt)
 	for(std::size_t i=1; i<m.size(); ++i) {	  
 	  std::string str(m[i].first, m[i].second);
 	  generateExpr[i-1] +=(boost::format(" WHEN RECORDCOUNT=%1% THEN '%2%' ") %
-			       mNumPivotColumns % str).str();
+			       numPivotColumns % str).str();
 	}
       } else {
 	// No  subexpressions.  Use the whole match as the value.
@@ -3756,12 +3841,12 @@ void LogicalUnpivot::check(PlanCheckContext& ctxt)
 	}
 	std::string str(m[0].first, m[0].second);
 	generateExpr[0] +=(boost::format(" WHEN RECORDCOUNT=%1% THEN '%2%' ") %
-			   mNumPivotColumns % str).str();
+			   numPivotColumns % str).str();
       }
       boost::format valueClauseFmt(" WHEN _tableIdx = %1% THEN %2%");
-      valueExpr += (valueClauseFmt % mNumPivotColumns % 
+      valueExpr += (valueClauseFmt % numPivotColumns % 
 		    member->GetName()).str();
-      mNumPivotColumns += 1;
+      numPivotColumns += 1;
     } else {
       nonPivotColumns += ",";
       nonPivotColumns += member->GetName();
@@ -3783,18 +3868,13 @@ void LogicalUnpivot::check(PlanCheckContext& ctxt)
   }
   generateOutput += ", RECORDCOUNT AS _tableIdx";
   valueExpr = ", CASE " + valueExpr + " END AS " + valueColumn;
-  std::vector<RecordMember> members;
-  members.push_back(RecordMember("RECORDCOUNT", Int64Type::Get(ctxt)));
-  members.push_back(RecordMember("PARTITIONCOUNT", Int32Type::Get(ctxt)));
-  members.push_back(RecordMember("PARTITION", Int32Type::Get(ctxt)));
-  mStateType = RecordType::get(ctxt, members);
-  mConstantScan = new RecordTypeTransfer(ctxt, "unpivotConstantScan", 
-					 mStateType, generateOutput);
+  mGenerator = new LogicalGenerate();
+  mGenerator->init(ctxt, generateOutput,
+		   boost::lexical_cast<std::string>(numPivotColumns), NULL);
+
   // In the cross join, output the pivot columns from the table, the
   // pivoted value column and the non-pivoted input columns.
-  std::vector<AliasedRecordType> types;
-  types.push_back(AliasedRecordType("table", mConstantScan->getTarget()));
-  types.push_back(AliasedRecordType("probe", getInput(0)->getRecordType()));
+  // std::string joinTransfer = boost::algorithm::join(pivotColumns, ",");
   std::string joinTransfer;
   for(std::size_t i=0; i<pivotColumns.size(); ++i) {
     if (i>0) {
@@ -3803,25 +3883,22 @@ void LogicalUnpivot::check(PlanCheckContext& ctxt)
     joinTransfer += pivotColumns[i];
   }
   joinTransfer += valueExpr + nonPivotColumns;
-  mTransfer = new RecordTypeTransfer2(ctxt, "makeoutput", types, joinTransfer);
+  mCrossJoin = new HashJoin(ctxt,
+			    HashJoin::INNER,
+			    mGenerator->getTarget(),
+			    getInput(0)->getRecordType(),
+			    "", "", "",
+	   joinTransfer);
 
-  getOutput(0)->setRecordType(mTransfer->getTarget());
+  getOutput(0)->setRecordType(mCrossJoin->getOutputType());
 }
 
 void LogicalUnpivot::create(class RuntimePlanBuilder& plan)
 {
   // Make generator and cross join with input.
-  RuntimeOperatorType * constantScan = 
-    new RuntimeGenerateOperatorType("constantScan",
-				    mStateType,
-				    mConstantScan,
-				    mNumPivotColumns);
+  RuntimeOperatorType * constantScan = mGenerator->create();
   plan.addOperatorType(constantScan);
-  RuntimeOperatorType * xjoin = 
-    new RuntimeCrossJoinOperatorType(mConstantScan->getTarget()->getFree(),
-				     getInput(0)->getRecordType()->getFree(),
-				     NULL,
-				     mTransfer);
+  RuntimeOperatorType * xjoin = mCrossJoin->create();
   plan.addOperatorType(xjoin);
   plan.connect(constantScan, 0, xjoin, 0);
   plan.mapInputPort(this, 0, xjoin, 1);  
@@ -3958,5 +4035,4 @@ void RuntimeSwitchOperator::onEvent(RuntimePort * port)
 void RuntimeSwitchOperator::shutdown()
 {
 }
-
 

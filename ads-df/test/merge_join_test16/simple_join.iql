@@ -1,0 +1,13 @@
+/**
+ * A simple one to many inner join.  Many side in the table.
+ */
+g1 = generate[output="4 - RECORDCOUNT/2 AS a", numRecords=10];
+
+g2 = generate[output="9 - RECORDCOUNT AS b", numRecords=10];
+
+j = merge_join[leftKey="a DESC", rightKey="b DESC"];
+g1 -> j;
+g2 -> j;
+
+d = write[file="output.txt", mode="text"];
+j -> d;

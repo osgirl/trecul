@@ -128,6 +128,17 @@ public:
 				  const std::string& name = "lessThan");
 };
 
+class CompareFunction
+{
+public:
+  static RecordTypeFunction * get(DynamicRecordContext & ctxt,
+				  const RecordType * lhs,
+				  const RecordType * rhs,
+				  const std::vector<SortKey>& leftFields,
+				  const std::vector<SortKey>& rightFields,
+				  const std::string& name = "compare");
+};
+
 class SortKeyPrefixFunction
 {
 public:
@@ -741,15 +752,22 @@ public:
 class LogicalGenerate : public LogicalOperator
 {
 private:
-  int64_t mNumRecords;
+  const RecordType * mInputType;
   const RecordType * mStateType;
-  RecordTypeTransfer * mTransfer;
-  std::string mProgram;
+  RecordTypeFunction * mNumRecords;
+  RecordTypeTransfer2 * mTransfer;
+
 public:
   LogicalGenerate();
   ~LogicalGenerate();
+  void init(PlanCheckContext& log,
+	    const std::string& output,
+	    const std::string& numRecords,
+	    const RecordType * input);
+  const RecordType * getTarget();
   void check(PlanCheckContext& log);
   void create(class RuntimePlanBuilder& plan);    
+  RuntimeOperatorType * create();
 };
 
 class RuntimeGenerateOperatorType : public RuntimeOperatorType
@@ -759,11 +777,12 @@ private:
   FieldAddress mRecordCount;
   FieldAddress mPartitionCount;
   FieldAddress mPartition;
-  int64_t mLoopUpperBound;
+  IQLFunctionModule * mLoopUpperBound;
   RecordTypeMalloc mStateMalloc;
   RecordTypeFree mStateFree;
-  const RecordTypeTransfer * mTransfer;
-  IQLTransferModule * mModule;
+  RecordTypeFree mInputFree;
+  const RecordTypeTransfer2 * mTransfer;
+  IQLTransferModule2 * mModule;
 
   // Serialization
   friend class boost::serialization::access;
@@ -777,19 +796,22 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mLoopUpperBound);
     ar & BOOST_SERIALIZATION_NVP(mStateMalloc);
     ar & BOOST_SERIALIZATION_NVP(mStateFree);
+    ar & BOOST_SERIALIZATION_NVP(mInputFree);
     ar & BOOST_SERIALIZATION_NVP(mModule);
   }
   RuntimeGenerateOperatorType()
     :
-    mLoopUpperBound(0),
-    mTransfer(NULL)
+    mLoopUpperBound(NULL),
+    mTransfer(NULL),
+    mModule(NULL)
   {
   }
 public:
   RuntimeGenerateOperatorType(const std::string& name,
+			      const RecordType * inputType,
 			      const RecordType * stateType,
-			      RecordTypeTransfer * transfer,
-			      int64_t upperBound);
+			      RecordTypeTransfer2 * transfer,
+			      RecordTypeFunction * upperBound);
   RuntimeGenerateOperatorType(DynamicRecordContext & ctxt, 
 			      const std::string & prog, 
 			      int64_t upperBound);
@@ -806,8 +828,11 @@ public:
 class RuntimeGenerateOperator : public RuntimeOperator
 {
 private:
-  enum State { START, WRITE };
+  enum State { START, READ, WRITE, WRITE_EOF };
   State mState;
+  uint32_t mIter;
+  uint32_t mEnd;
+  RecordBuffer mInput;
   RecordBuffer mStateRecord;
   class InterpreterContext * mRuntimeContext;
   const RuntimeGenerateOperatorType & getGenerateType() { return *reinterpret_cast<const RuntimeGenerateOperatorType *>(&getOperatorType()); }
@@ -2122,54 +2147,10 @@ class SortMergeJoin : public LogicalOperator
 {
 public:
   enum JoinType { INNER, FULL_OUTER, LEFT_OUTER, RIGHT_OUTER, RIGHT_SEMI, RIGHT_ANTI_SEMI };
-
   static bool isInnerOrOuter(JoinType joinType);
-
   static RecordTypeTransfer * makeNullableTransfer(DynamicRecordContext& ctxt,
 						   const RecordType * input);
 
-  static RecordTypeFunction * createMemcmpFunction(DynamicRecordContext& ctxt,
-						   const std::vector<std::string>& leftFields,
-						   const RecordType * leftInputType,
-						   const std::vector<std::string>& rightFields,
-						   const RecordType * rightInputType);
-
-  static RecordTypeFunction * createEqualityFunction(DynamicRecordContext& ctxt,
-						     const std::vector<std::string>& fields,
-						     const RecordType * inputType)
-  {
-    return createEqualityFunction(ctxt, fields, inputType, fields, inputType);
-  }
-  static RecordTypeFunction * createEqualityFunction(DynamicRecordContext& ctxt,
-						     const std::vector<std::string>& leftFields,
-						     const RecordType * leftInputType,
-						     const std::vector<std::string>& rightFields,
-						     const RecordType * rightInputType)
-  {
-    return createCompareFunction(ctxt, leftFields, leftInputType, rightFields, rightInputType, "=");
-  }
-
-  static RecordTypeFunction * createLessThanFunction(DynamicRecordContext& ctxt,
-						     const std::vector<std::string>& fields,
-						     const RecordType * inputType)
-  {
-    return createLessThanFunction(ctxt, fields, inputType, fields, inputType);
-  }
-  static RecordTypeFunction * createLessThanFunction(DynamicRecordContext& ctxt,
-						     const std::vector<std::string>& leftFields,
-						     const RecordType * leftInputType,
-						     const std::vector<std::string>& rightFields,
-						     const RecordType * rightInputType)
-  {
-    return createCompareFunction(ctxt, leftFields, leftInputType, rightFields, rightInputType, "<");
-  }
-
-  static RecordTypeFunction * createCompareFunction(DynamicRecordContext& ctxt,
-						     const std::vector<std::string>& leftFields,
-						     const RecordType * leftInputType,
-						     const std::vector<std::string>& rightFields,
-						    const RecordType * rightInputType,
-						    const std::string& op);
 private:
   JoinType mJoinType;
   const RecordType * mLeftInput;
@@ -2183,8 +2164,8 @@ private:
   RecordTypeTransfer * mRightMakeNullableTransfer;
 
   void init(DynamicRecordContext & ctxt,
-	    const std::vector<std::string>& leftKeys,
-	    const std::vector<std::string>& rightKeys,
+	    const std::vector<SortKey>& leftKeys,
+	    const std::vector<SortKey>& rightKeys,
 	    const std::string& residual,
 	    const std::string& matchTransfer);
 public:
@@ -2193,8 +2174,8 @@ public:
 		JoinType joinType,
 		const RecordType * leftInput,
 		const RecordType * rightInput,
-		const std::vector<std::string>& leftKeys,
-		const std::vector<std::string>& rightKeys,
+		const std::vector<SortKey>& leftKeys,
+		const std::vector<SortKey>& rightKeys,
 		const std::string& residual,
 		const std::string& matchTransfer);
   ~SortMergeJoin();
@@ -2434,11 +2415,8 @@ public:
 class LogicalUnpivot : public LogicalOperator
 {
 private:
-  const RecordType * mStateType;
-  RecordTypeTransfer * mConstantScan;
-  RecordTypeTransfer2 * mTransfer;
-  // Number of columns that are being unpivoted.
-  int64_t mNumPivotColumns;
+  LogicalGenerate * mGenerator;
+  HashJoin * mCrossJoin;
 public:
   LogicalUnpivot();
   ~LogicalUnpivot();
