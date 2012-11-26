@@ -288,6 +288,12 @@ private:
   // name here.  Note that this should be getting resolved during type
   // check not during code generation.
   std::map<std::string, std::string> mTreculNameToSymbol;
+
+  /**
+   * Private Interface to the VARCHAR datatype.
+   */
+  llvm::Value * buildVarcharIsSmall(llvm::Value * varcharPtr);
+
 public:
   LLVMContextRef LLVMContext;
   LLVMModuleRef LLVMModule;
@@ -528,6 +534,12 @@ public:
 					 const FieldType * rhsType, 
 					 llvm::Value * ret, 
 					 const FieldType * retType);
+
+  /**
+   * Interface to the VARCHAR datatype.
+   */
+  llvm::Value * buildVarcharGetSize(llvm::Value * varcharPtr);
+  llvm::Value * buildVarcharGetPtr(llvm::Value * varcharPtr);
 };
 
 

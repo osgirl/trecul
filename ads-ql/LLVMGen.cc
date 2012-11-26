@@ -454,46 +454,6 @@ IQLToLLVMValueRef IQLToLLVMBuildNullableBinaryOp(CodeGenerationContext * ctxt,
 // Helpers when accessing Varchar members
 ////////////////////////////////////////
 
-LLVMValueRef IQLToLLVMVarcharGetSize(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr)
-{
-  // LLVMValueRef gepOffsets[2];
-  // gepOffsets[0] = LLVMConstInt(LLVMInt64TypeInContext(ctxt->LLVMContext), 0, 1);
-  // gepOffsets[1] = LLVMConstInt(LLVMInt64TypeInContext(ctxt->LLVMContext), 0, 1);
-  // return LLVMBuildLoad(ctxt->LLVMBuilder, 
-  // 		       LLVMBuildGEP(ctxt->LLVMBuilder, varcharPtr, &gepOffsets[0], 2, "varcharszaddr"), 
-  // 		       "varcharsz");
-  return LLVMBuildLoad(ctxt->LLVMBuilder,
-		       LLVMBuildStructGEP(ctxt->LLVMBuilder, varcharPtr, 0, "varcharszaddr"), "varchar_sz");
-}
-
-void IQLToLLVMVarcharSetSize(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr, LLVMValueRef sz)
-{
-  LLVMValueRef elt = LLVMBuildStructGEP(ctxt->LLVMBuilder, varcharPtr, 0, "varcharszaddr");
-  LLVMBuildStore(ctxt->LLVMBuilder,
-  		 sz, 
-  		 elt);
-}
-
-LLVMValueRef IQLToLLVMVarcharGetPtr(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr)
-{
-  // LLVMValueRef gepOffsets[2];
-  // gepOffsets[0] = LLVMConstInt(LLVMInt64TypeInContext(ctxt->LLVMContext), 0, 1);
-  // gepOffsets[1] = LLVMConstInt(LLVMInt64TypeInContext(ctxt->LLVMContext), 1, 1);
-  // return LLVMBuildLoad(ctxt->LLVMBuilder, 
-  // 		       LLVMBuildGEP(ctxt->LLVMBuilder, varcharPtr, &gepOffsets[0], 2, "varcharptraddr"),
-  // 		       "varcharptr");
-  return LLVMBuildLoad(ctxt->LLVMBuilder,
-		       LLVMBuildStructGEP(ctxt->LLVMBuilder, varcharPtr, 1, "varcharptraddr"), "varchar_ptr");
-}
-
-void IQLToLLVMVarcharSetPtr(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr, LLVMValueRef ptr)
-{
-  LLVMValueRef elt = LLVMBuildStructGEP(ctxt->LLVMBuilder, varcharPtr, 1, "varcharptraddr");
-  LLVMBuildStore(ctxt->LLVMBuilder,
-		 ptr, 
-		 elt);
-}
-
 IQLToLLVMValue::ValueType IQLToLLVMCreateBinaryVarcharCall(CodeGenerationContext * ctxt, IQLToLLVMValueRef lhs, IQLToLLVMValueRef rhs, LLVMValueRef ret, enum VarcharOpCode opCode) {
   const char * externFuncs [] = { "InternalVarcharAdd" };
   LLVMValueRef callArgs[4];
@@ -700,8 +660,8 @@ IQLToLLVMValueRef IQLToLLVMBuildHash(IQLCodeGenerationContextRef ctxtRef, IQLToL
       callArgs[2] = i==0 ? LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), 8, 0) : previousHash;    
     } else if (LLVMPointerTypeKind == LLVMGetTypeKind(LLVMTypeOf(argVal)) &&
 	       LLVMGetElementType(LLVMTypeOf(argVal))== ctxt->LLVMVarcharType) {
-      callArgs[0] = IQLToLLVMVarcharGetPtr(ctxt, argVal);
-      callArgs[1] = IQLToLLVMVarcharGetSize(ctxt, argVal);
+      callArgs[0] = llvm::wrap(ctxt->buildVarcharGetPtr(llvm::unwrap(argVal)));
+      callArgs[1] = llvm::wrap(ctxt->buildVarcharGetSize(llvm::unwrap(argVal)));
       callArgs[2] = i==0 ? callArgs[1] : previousHash;
     } else if (IQLToLLVMTypePredicate::isChar(argVal)) {
       // Hash on array length - 1 because of trailing null char and we want
@@ -3198,6 +3158,42 @@ IQLToLLVMValueRef IQLToLLVMBuildVarcharLiteral(IQLCodeGenerationContextRef ctxtR
   boost::replace_all(str, "\\r", "\r");
   boost::replace_all(str, "\\'", "'");
 
+  if (str.size() < Varchar::MIN_LARGE_STRING_SIZE) {
+    // Create type for small varchar
+    LLVMTypeRef varcharMembers[2];
+    varcharMembers[0] = LLVMInt8TypeInContext(ctxt->LLVMContext);
+    varcharMembers[1] = LLVMArrayType(LLVMInt8TypeInContext(ctxt->LLVMContext),
+				      sizeof(VarcharLarge) - 1);
+    LLVMTypeRef smallVarcharTy =
+      LLVMStructTypeInContext(ctxt->LLVMContext, &varcharMembers[0], 2, 0);
+    // Create the global
+    LLVMValueRef globalVar = 
+      LLVMAddGlobal(ctxt->LLVMModule, smallVarcharTy, "smallVarcharLiteral");
+
+    // Initialize it
+    // TODO: Encapsulate magic computation here of 2*sz which puts
+    // the size into upper 7 bits and 0 into low bit.
+    std::size_t sz = 2*str.size();
+    LLVMValueRef constMembers[2];
+    LLVMTypeRef int8Ty = LLVMInt8TypeInContext(ctxt->LLVMContext);
+    constMembers[0] = LLVMConstInt(int8Ty, sz, true);
+    LLVMValueRef arrayMembers[sizeof(VarcharLarge)-1];
+    for(std::size_t i=0; i<str.size(); i++) {
+      arrayMembers[i] = LLVMConstInt(int8Ty, str[i], true);
+    }
+    for(std::size_t i=str.size(); i < sizeof(VarcharLarge)-1; i++) {
+      arrayMembers[i] = LLVMConstInt(int8Ty, 0, true);
+    }
+    constMembers[1] = 
+      LLVMConstArray(int8Ty, &arrayMembers[0], sizeof(VarcharLarge)-1);
+    LLVMValueRef globalVal = 
+      LLVMConstStructInContext(ctxt->LLVMContext, &constMembers[0], 2, 0);
+    LLVMSetInitializer(globalVar, globalVal);
+    // Cast to varchar type
+    LLVMValueRef val = 
+      LLVMConstBitCast(globalVar, LLVMPointerType(ctxt->LLVMVarcharType, 0));
+    return IQLToLLVMValue::get(ctxt, val, IQLToLLVMValue::eLocal);
+  } else {
   // Put the string in as a global variable and then create a struct that references it.  
   // This is the global variable itself
   LLVMValueRef globalVar = LLVMAddGlobal(ctxt->LLVMModule, 
@@ -3214,17 +3210,23 @@ IQLToLLVMValueRef IQLToLLVMBuildVarcharLiteral(IQLCodeGenerationContextRef ctxtR
   // Now to reference the global we have to use a const GEP.  To pass
   // by value into the copy method we have to create a stack variable
   // in order to get an address.
-  LLVMValueRef constStructMembers[2];
-  constStructMembers[0] = LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), (int32_t) str.size(), true);
+  // TODO: Fix this so we make it Small when relevant.
+  uint32_t sz = (uint32_t) str.size();
+  // Flip the bit to make this a Large model string.
+  sz = 2*sz + 1;
+  LLVMValueRef constStructMembers[3];
+  constStructMembers[0] = LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), sz, true);
   LLVMValueRef constGEPIndexes[2];
   constGEPIndexes[0] = LLVMConstIntOfString(LLVMInt64TypeInContext(ctxt->LLVMContext), "0", 10);
   constGEPIndexes[1] = LLVMConstIntOfString(LLVMInt64TypeInContext(ctxt->LLVMContext), "0", 10);  
-  constStructMembers[1] = LLVMConstGEP(globalVar, &constGEPIndexes[0], 2);
-  LLVMValueRef globalString = LLVMConstStructInContext(ctxt->LLVMContext, &constStructMembers[0], 2, 0);
+  constStructMembers[1] = LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), 0, true);
+  constStructMembers[2] = LLVMConstGEP(globalVar, &constGEPIndexes[0], 2);
+  LLVMValueRef globalString = LLVMConstStructInContext(ctxt->LLVMContext, &constStructMembers[0], 3, 0);
   LLVMValueRef globalStringAddr = LLVMCreateEntryBlockAlloca(ctxt, ctxt->LLVMVarcharType, "globalliteral");
   LLVMBuildStore(ctxt->LLVMBuilder, globalString, globalStringAddr);
 
   return IQLToLLVMValue::get(ctxt, globalStringAddr, IQLToLLVMValue::eGlobal);
+  }
 }
 
 IQLToLLVMValueRef IQLToLLVMBuildDecimalLiteral(IQLCodeGenerationContextRef ctxtRef, const char * val)

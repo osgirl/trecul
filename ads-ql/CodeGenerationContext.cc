@@ -1089,6 +1089,81 @@ CodeGenerationContext::buildDateAdd(const IQLToLLVMValue * lhs,
   return IQLToLLVMValue::eLocal;  
 }
 
+llvm::Value * 
+CodeGenerationContext::buildVarcharIsSmall(llvm::Value * varcharPtr)
+{
+  llvm::IRBuilder<> * b = llvm::unwrap(LLVMBuilder);
+  // Access first bit of the structure to see if large or small.
+  llvm::Value * firstByte = 
+    b->CreateLoad(b->CreateBitCast(varcharPtr, b->getInt8PtrTy()));
+  return 
+    b->CreateICmpEQ(b->CreateAnd(b->getInt8(1U),
+				 firstByte),
+		    b->getInt8(0U));
+}
+
+llvm::Value * 
+CodeGenerationContext::buildVarcharGetSize(llvm::Value * varcharPtr)
+{
+  llvm::LLVMContext * c = llvm::unwrap(LLVMContext);
+  llvm::IRBuilder<> * b = llvm::unwrap(LLVMBuilder);
+  llvm::Function * f = b->GetInsertBlock()->getParent();
+
+  llvm::Value * ret = b->CreateAlloca(b->getInt32Ty());
+  
+  llvm::BasicBlock * smallBB = llvm::BasicBlock::Create(*c, "small", f);
+  llvm::BasicBlock * largeBB = llvm::BasicBlock::Create(*c, "large", f);
+  llvm::BasicBlock * contBB = llvm::BasicBlock::Create(*c, "cont", f);
+  
+  b->CreateCondBr(buildVarcharIsSmall(varcharPtr), smallBB, largeBB);
+  b->SetInsertPoint(smallBB);
+  llvm::Value * firstByte = 
+    b->CreateLoad(b->CreateBitCast(varcharPtr, b->getInt8PtrTy()));
+  b->CreateStore(b->CreateSExt(b->CreateAShr(b->CreateAnd(b->getInt8(0xfe),
+							  firstByte),  
+					     b->getInt8(1U)),
+			       b->getInt32Ty()),
+		 ret);
+  b->CreateBr(contBB);
+  b->SetInsertPoint(largeBB);
+  llvm::Value * firstDWord = b->CreateLoad(b->CreateStructGEP(varcharPtr, 0));
+  b->CreateStore(b->CreateAShr(b->CreateAnd(b->getInt32(0xfffffffe),
+					    firstDWord),  
+			       b->getInt32(1U)),
+		 ret);
+  b->CreateBr(contBB);
+  b->SetInsertPoint(contBB);
+  return b->CreateLoad(ret);
+}
+
+llvm::Value * 
+CodeGenerationContext::buildVarcharGetPtr(llvm::Value * varcharPtr)
+{
+  llvm::LLVMContext * c = llvm::unwrap(LLVMContext);
+  llvm::IRBuilder<> * b = llvm::unwrap(LLVMBuilder);
+  llvm::Function * f = b->GetInsertBlock()->getParent();
+
+  llvm::Value * ret = b->CreateAlloca(b->getInt8PtrTy());
+  
+  llvm::BasicBlock * smallBB = llvm::BasicBlock::Create(*c, "small", f);
+  llvm::BasicBlock * largeBB = llvm::BasicBlock::Create(*c, "large", f);
+  llvm::BasicBlock * contBB = llvm::BasicBlock::Create(*c, "cont", f);
+  
+  b->CreateCondBr(buildVarcharIsSmall(varcharPtr), smallBB, largeBB);
+  b->SetInsertPoint(smallBB);
+  b->CreateStore(b->CreateConstGEP1_64(b->CreateBitCast(varcharPtr, 
+							b->getInt8PtrTy()), 
+				       1),
+		 ret);
+  b->CreateBr(contBB);
+  b->SetInsertPoint(largeBB);
+  b->CreateStore(b->CreateLoad(b->CreateStructGEP(varcharPtr, 2)), ret);
+  b->CreateBr(contBB);
+  b->SetInsertPoint(contBB);
+  return b->CreateLoad(ret);
+}
+
+
 LLVMSymbolTableRef LLVMSymbolTableCreate()
 {
   return reinterpret_cast<LLVMSymbolTableRef>(new std::map<std::string, IQLToLLVMValueRef>());
@@ -1322,37 +1397,17 @@ IQLToLLVMValueRef IQLToLLVMBinaryConversion::convertTo(CodeGenerationContext * c
     // the varchar.
     if (LLVMPointerTypeKind == LLVMGetTypeKind(e2) &&
 	LLVMGetElementType(e2) == ctxt->LLVMVarcharType) {
-      LLVMValueRef callArgs[4];
-      LLVMValueRef fn = LLVMGetNamedFunction(ctxt->LLVMModule, "InternalVarcharCopy");
-      // Create a temporary of type Varchar.  Put pointer to char and size into it so we may
-      // call InternalVarcharCopy.
-      callArgs[0] = LLVMCreateEntryBlockAlloca(ctxt, 
-					       ctxt->LLVMVarcharType, 
-					       "CharToVarchar");
-      // LLVM Char array length counts terminating 0 but Varchar Size should not.
-      IQLToLLVMVarcharSetSize(ctxt, 
-			      callArgs[0], 
-			      LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), 
-					   IQLToLLVMTypeInspector::getCharArrayLength(e1)-1,
-					   1));
-
+      LLVMValueRef callArgs[3];
+      LLVMValueRef fn = LLVMGetNamedFunction(ctxt->LLVMModule, "InternalVarcharFromChar");
       // Cast char array to a pointer to int8_t.
       LLVMTypeRef int8Ptr = LLVMPointerType(LLVMInt8TypeInContext(ctxt->LLVMContext), 0);
-      LLVMValueRef tmp1 = LLVMBuildBitCast(ctxt->LLVMBuilder, llvmVal, int8Ptr, "charcnvcasttmp1");
-      IQLToLLVMVarcharSetPtr(ctxt, 
-			     callArgs[0], 
-			     tmp1);
-
+      callArgs[0] = LLVMBuildBitCast(ctxt->LLVMBuilder, llvmVal, int8Ptr, "charcnvcasttmp1");
       // This is the varchar we are converting to.
       callArgs[1] = LLVMCreateEntryBlockAlloca(ctxt, ctxt->LLVMVarcharType, "varcharliteral");
-      // We must track the allocated memory.
-      callArgs[2] = LLVMConstInt(LLVMInt32TypeInContext(ctxt->LLVMContext), 
-				 1,
-				 1);
-      callArgs[3] = LLVMBuildLoad(ctxt->LLVMBuilder, 
+      callArgs[2] = LLVMBuildLoad(ctxt->LLVMBuilder, 
 				  ctxt->getContextArgumentRef(),
 				  "ctxttmp");
-      LLVMBuildCall(ctxt->LLVMBuilder, fn, &callArgs[0], 4, "");
+      LLVMBuildCall(ctxt->LLVMBuilder, fn, &callArgs[0], 3, "");
       return IQLToLLVMValue::get(ctxt, callArgs[1], IQLToLLVMValue::eLocal);
     }
   } else {

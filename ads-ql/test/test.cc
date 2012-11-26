@@ -72,6 +72,77 @@ boost::shared_ptr<RecordType> createLogInputType(DynamicRecordContext & ctxt)
   return boost::shared_ptr<RecordType> (new RecordType(members));
 }
 
+BOOST_AUTO_TEST_CASE(testVarcharDataType)
+{
+  // Test transition from small model to large
+  // model strings.
+  const char * buf = "smallstring123456789";
+  int32_t len = ::strlen(buf);
+  for(int32_t i = 1; i<=14; ++i) {
+    Varchar v;
+    std::string expected(buf, i);
+    v.assign(buf, i);
+    BOOST_CHECK(!v.Large.Large);
+    BOOST_CHECK((const char *)(&v) + 1 == v.c_str());
+    BOOST_CHECK_EQUAL(i, v.size());
+    BOOST_CHECK(boost::algorithm::equals(expected, v.c_str()));
+  }
+  for(int32_t i = 15; i<=len; ++i) {
+    Varchar v;
+    std::string expected(buf, i);
+    v.assign(buf, i);
+    BOOST_CHECK(v.Large.Large);
+    BOOST_CHECK((const char *)(&v) + 1 != v.c_str());
+    BOOST_CHECK_EQUAL(i, v.size());
+    BOOST_CHECK(boost::algorithm::equals(expected, v.c_str()));
+  }
+}
+
+BOOST_AUTO_TEST_CASE(testTransferStringLiteral)
+{
+  DynamicRecordContext ctxt;
+  InterpreterContext runtimeCtxt;
+  std::vector<RecordMember> members;
+  RecordType recTy(members);
+
+  RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
+			"'small' AS a"
+			", 'laaaaaaaaaaaaaaaaaaaaaaaaaarge' AS b"
+			", 'smallstring123' AS c"
+			", 'largestring1234' AS d"
+			);
+  
+  BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
+		    t1.getTarget()->getMember("a").GetType()->GetEnum());
+  BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
+		    t1.getTarget()->getMember("b").GetType()->GetEnum());
+  BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
+		    t1.getTarget()->getMember("c").GetType()->GetEnum());
+  BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
+		    t1.getTarget()->getMember("d").GetType()->GetEnum());
+  RecordBuffer inputBuf;
+  RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+  t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);  
+  const char * actual =
+    t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str();
+  BOOST_CHECK(!t1.getTarget()->getVarcharPtr("a", outputBuf)->Large.Large);
+  BOOST_CHECK(boost::algorithm::equals("small",
+				       actual));
+  actual = t1.getTarget()->getVarcharPtr("b", outputBuf)->c_str();
+  BOOST_CHECK(t1.getTarget()->getVarcharPtr("b", outputBuf)->Large.Large);
+  BOOST_CHECK(boost::algorithm::equals("laaaaaaaaaaaaaaaaaaaaaaaaaarge",
+				       actual));
+  actual = t1.getTarget()->getVarcharPtr("c", outputBuf)->c_str();
+  BOOST_CHECK(!t1.getTarget()->getVarcharPtr("c", outputBuf)->Large.Large);
+  BOOST_CHECK(boost::algorithm::equals("smallstring123",
+				       actual));
+  actual = t1.getTarget()->getVarcharPtr("d", outputBuf)->c_str();
+  BOOST_CHECK(t1.getTarget()->getVarcharPtr("d", outputBuf)->Large.Large);
+  BOOST_CHECK(boost::algorithm::equals("largestring1234",
+				       actual));
+  t1.getTarget()->getFree().free(outputBuf);
+}
+
 void ImplicitCastInt32ToDouble(bool int32Nullable, bool doubleNullable)
 {
   DynamicRecordContext ctxt;
@@ -1004,6 +1075,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordHash)
   members.push_back(RecordMember("c", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("d", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("e", DoubleType::Get(ctxt)));
+  members.push_back(RecordMember("f", VarcharType::Get(ctxt)));
   RecordType recTy(members);
   std::vector<RecordMember> emptyMembers;
   RecordType emptyTy(emptyMembers);
@@ -1013,10 +1085,11 @@ BOOST_AUTO_TEST_CASE(testIQLRecordHash)
 
   RecordBuffer inputBuf = recTy.GetMalloc()->malloc();
   recTy.setChar("a", "123456", inputBuf);
-  recTy.setVarchar("b", "abcdefghijklmnop", inputBuf);
+  recTy.setVarchar("b", "abcdefghijklmnopqrstuvwxyz", inputBuf);
   recTy.setInt32("c", 9923432, inputBuf);
   recTy.setInt64("d", 1239923432, inputBuf);
   recTy.setDouble("e", 8234.24344, inputBuf);
+  recTy.setVarchar("f", "abcd", inputBuf);
 
   {
     RecordTypeFunction hasher(ctxt, "charhash", types, "#(a)");
@@ -1027,8 +1100,8 @@ BOOST_AUTO_TEST_CASE(testIQLRecordHash)
   {
     RecordTypeFunction hasher(ctxt, "varcharhash", types, "#(b)");
     uint32_t val = (uint32_t) hasher.execute(inputBuf, RecordBuffer(NULL), &runtimeCtxt);
-    int32_t sz = strlen("abcdefghijklmnop");
-    uint32_t expected = SuperFastHash("abcdefghijklmnop", sz, sz);
+    int32_t sz = strlen("abcdefghijklmnopqrstuvwxyz");
+    uint32_t expected = SuperFastHash("abcdefghijklmnopqrstuvwxyz", sz, sz);
     BOOST_CHECK_EQUAL(val, expected);
   }
   {
@@ -1053,6 +1126,13 @@ BOOST_AUTO_TEST_CASE(testIQLRecordHash)
     BOOST_CHECK_EQUAL(val, expected);
   }
   {
+    RecordTypeFunction hasher(ctxt, "varcharhash", types, "#(f)");
+    uint32_t val = (uint32_t) hasher.execute(inputBuf, RecordBuffer(NULL), &runtimeCtxt);
+    int32_t sz = strlen("abcd");
+    uint32_t expected = SuperFastHash("abcd", sz, sz);
+    BOOST_CHECK_EQUAL(val, expected);
+  }
+  {
     RecordTypeFunction hasher(ctxt, "int64hash", types, "#(d,a)");
     uint32_t val = (uint32_t) hasher.execute(inputBuf, RecordBuffer(NULL), &runtimeCtxt);
     int64_t tmp = 1239923432;
@@ -1074,6 +1154,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
   members.push_back(RecordMember("c", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("d", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("y", DoubleType::Get(ctxt)));
+  members.push_back(RecordMember("w", VarcharType::Get(ctxt)));
   RecordType recTy(members);
   std::vector<RecordMember> rhsMembers;
   // dummy field to make sure that the offsets of fields we are comparing
@@ -1084,6 +1165,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
   rhsMembers.push_back(RecordMember("g", Int32Type::Get(ctxt)));
   rhsMembers.push_back(RecordMember("h", Int64Type::Get(ctxt)));
   rhsMembers.push_back(RecordMember("z", DoubleType::Get(ctxt)));
+  rhsMembers.push_back(RecordMember("x", VarcharType::Get(ctxt)));
   RecordType rhsTy(rhsMembers);
   std::vector<const RecordType *> types;
   types.push_back(&recTy);
@@ -1095,6 +1177,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
   recTy.setInt32("c", 9923432, lhs);
   recTy.setInt64("d", 1239923432, lhs);
   recTy.setDouble("y", 88823.23433, lhs);
+  recTy.setVarchar("w", "abcd", lhs);
 
   RecordBuffer rhs1 = rhsTy.GetMalloc()->malloc();
   rhsTy.setInt32("dummy", 0, rhs1);
@@ -1103,6 +1186,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
   rhsTy.setInt32("g", 9923431, rhs1);
   rhsTy.setInt64("h", 1239923433, rhs1);
   rhsTy.setDouble("z", 62344.23411, rhs1);
+  rhsTy.setVarchar("x", "abce", rhs1);
 
   RecordBuffer rhs2 = rhsTy.GetMalloc()->malloc();
   rhsTy.setInt32("dummy", 0, rhs2);
@@ -1111,6 +1195,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
   rhsTy.setInt32("g", 9923432, rhs2);
   rhsTy.setInt64("h", 1239923432, rhs2);
   rhsTy.setDouble("z", 88823.23433, rhs2);
+  rhsTy.setVarchar("x", "abcd", rhs2);
 
   {
     RecordTypeFunction equals(ctxt, "chareq", types, "a = e");
@@ -1146,6 +1231,27 @@ BOOST_AUTO_TEST_CASE(testIQLRecordEquals)
     BOOST_CHECK_EQUAL(val, 0);
     val = equals.execute(lhs, rhs2, &runtimeCtxt);
     BOOST_CHECK_EQUAL(val, 1);    
+  }
+  {
+    RecordTypeFunction equals(ctxt, "varchareq", types, "b = x");
+    int32_t val = equals.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+    val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);    
+  }
+  {
+    RecordTypeFunction equals(ctxt, "varchareq", types, "w = x");
+    int32_t val = equals.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+    val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);    
+  }
+  {
+    RecordTypeFunction equals(ctxt, "varchareq", types, "w = f");
+    int32_t val = equals.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+    val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);    
   }
 
   recTy.GetFree()->free(lhs);
@@ -1486,6 +1592,91 @@ BOOST_AUTO_TEST_CASE(testIQLCharKeyPrefix)
   recTy.GetFree()->free(lhs);
 }
 
+void checkShortStringLiteralCompares(DynamicRecordContext & ctxt,
+				     InterpreterContext & runtimeCtxt,
+				     std::vector<const RecordType *> & types,
+				     RecordBuffer lhs,
+				     const std::string& field)
+{
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, (boost::format("%1% >= '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, (boost::format("%1% <= '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% > '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% < '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% = '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% <> '123456'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% >= '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% <= '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% > '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% < '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% = '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% <> '123457'") % field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "chareq", types, 
+			      (boost::format("%1% <> '1234566666666666666666'") % 
+			       field).str());
+    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(testIQLLiteralCompares)
 {
   DynamicRecordContext ctxt;
@@ -1496,6 +1687,7 @@ BOOST_AUTO_TEST_CASE(testIQLLiteralCompares)
   members.push_back(RecordMember("c", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("d", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("y", DoubleType::Get(ctxt)));
+  members.push_back(RecordMember("z", VarcharType::Get(ctxt)));
   RecordType recTy(members);
   std::vector<RecordMember> rhsMembers;
   RecordType rhsTy(rhsMembers);
@@ -1509,67 +1701,10 @@ BOOST_AUTO_TEST_CASE(testIQLLiteralCompares)
   recTy.setInt32("c", 9923432, lhs);
   recTy.setInt64("d", 1239923431, lhs);
   recTy.setDouble("y", 88823.23433, lhs);
+  recTy.setVarchar("z", "123456", lhs);
 
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a >= '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a <= '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a > '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a < '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a = '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a <> '123456'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a >= '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a <= '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a > '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a < '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a = '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 0);
-  }
-  {
-    RecordTypeFunction equals(ctxt, "chareq", types, "a <> '123457'");
-    int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
-    BOOST_CHECK_EQUAL(val, 1);
-  }
+  checkShortStringLiteralCompares(ctxt, runtimeCtxt, types, lhs, "a");
+  checkShortStringLiteralCompares(ctxt, runtimeCtxt, types, lhs, "z");
   {
     RecordTypeFunction equals(ctxt, "varchareq", types, "b >= 'aaaa'");
     int32_t val = equals.execute(lhs, NULL, &runtimeCtxt);
@@ -2213,6 +2348,7 @@ BOOST_AUTO_TEST_CASE(testRecordTypeSerialize)
   members.push_back(RecordMember("c", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("d", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("e", DoubleType::Get(ctxt)));
+  members.push_back(RecordMember("f", VarcharType::Get(ctxt)));
   RecordType recTy(members);
   std::vector<RecordMember> emptyMembers;
   RecordType emptyTy(emptyMembers);
@@ -2226,6 +2362,7 @@ BOOST_AUTO_TEST_CASE(testRecordTypeSerialize)
   recTy.setInt32("c", 9923432, inputBuf);
   recTy.setInt64("d", 1239923432, inputBuf);
   recTy.setDouble("e", 8234.24344, inputBuf);
+  recTy.setVarchar("f", "small", inputBuf);
 
   // Give a big buffer where serialization succeeds in a single pass
   uint8_t bigBuf[128];
@@ -2234,14 +2371,23 @@ BOOST_AUTO_TEST_CASE(testRecordTypeSerialize)
   recIt.init(inputBuf);
   bool ret = recTy.getSerialize().doit(bufPtr, bigBuf+128, recIt, inputBuf);
   BOOST_CHECK(ret);
-  BOOST_CHECK_EQUAL(&bigBuf[65], bufPtr);
+  BOOST_CHECK_EQUAL(&bigBuf[81], bufPtr);
 
   // Deserialize and make sure all is well
   RecordBuffer outputBuf = recTy.GetMalloc()->malloc();
   recIt.init(outputBuf);
   bufPtr = &bigBuf[0];
-  ret = recTy.getDeserialize().Do(bufPtr, &bigBuf[65], recIt, outputBuf);
+  ret = recTy.getDeserialize().Do(bufPtr, &bigBuf[81], recIt, outputBuf);
   BOOST_CHECK(ret);
+  BOOST_CHECK(boost::algorithm::equals("123456",
+				       recTy.getFieldAddress("a").getCharPtr(outputBuf)));
+  BOOST_CHECK(boost::algorithm::equals("abcdefghijklmnop",
+				       recTy.getFieldAddress("b").getVarcharPtr(outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(9923432, recTy.getFieldAddress("c").getInt32(outputBuf));
+  BOOST_CHECK_EQUAL(1239923432LL, recTy.getFieldAddress("d").getInt64(outputBuf));
+  BOOST_CHECK_EQUAL(8234.24344, recTy.getFieldAddress("e").getDouble(outputBuf));
+  BOOST_CHECK(boost::algorithm::equals("small",
+				       recTy.getFieldAddress("f").getVarcharPtr(outputBuf)->c_str()));
 }
 
 BOOST_AUTO_TEST_CASE(testRecordTypeNullBitmap)
@@ -3013,7 +3159,7 @@ BOOST_AUTO_TEST_CASE(testIQLCaseStatementVarchar)
   InterpreterContext runtimeCtxt;
   t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
   BOOST_CHECK(boost::algorithm::equals("TRUE",
-				       t1.getTarget()->getVarcharPtr("d", outputBuf)->Ptr));
+				       t1.getTarget()->getVarcharPtr("d", outputBuf)->c_str()));
 }
 
 BOOST_AUTO_TEST_CASE(testIQLCaseStatementDecimal)
@@ -3599,6 +3745,7 @@ BOOST_AUTO_TEST_CASE(testIQLFunctionCallString)
   members.push_back(RecordMember("a", VarcharType::Get(ctxt)));
   members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
   members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("d", VarcharType::Get(ctxt)));
   boost::shared_ptr<RecordType> recordType(new RecordType(members));
   
   // Simple Transfer of everything
@@ -3613,26 +3760,64 @@ BOOST_AUTO_TEST_CASE(testIQLFunctionCallString)
 			", rtrim(b) as l"
 			", upper(c) as m"
 			", lower(c) as n"
+			", lower(d) as o"
+			", upper(d) as p"
+			", trim(d) as q"
+			", rtrim(d) as r"
+			", ltrim(d) as s"
+			", substr(d, 3, 5) as t"
+			", substr(d, 3, 30) as u"
+			", a + d AS v"
+			", d + a AS w"
+			", d + d AS x"
 			);
 
   // Actually execute this thing.
+  std::string longStr (" This is a Long String That Lives On The heap  ");
+  const char * substr2Expected = "is is a Long String That Lives";
+  const char * shortPlusLong = "aaa This is a Long String That Lives On The heap  ";
+  const char * longPlusShort = " This is a Long String That Lives On The heap  aaa";
+  const char * longPlusLong = 
+    " This is a Long String That Lives On The heap  "
+    " This is a Long String That Lives On The heap  ";
   RecordBuffer inputBuf = recordType->GetMalloc()->malloc();
   recordType->setVarchar("a", "aaa", inputBuf);
   recordType->setVarchar("b", "    bbbb dfee   ", inputBuf);
   recordType->setVarchar("c", "cdefGHIJK", inputBuf);
+  recordType->setVarchar("d", longStr.c_str(), inputBuf);
   RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
   InterpreterContext runtimeCtxt;
   t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
-  BOOST_CHECK_EQUAL(0, strcmp("aaa", t1.getTarget()->getVarcharPtr("a", outputBuf)->Ptr));
+  BOOST_CHECK_EQUAL(0, strcmp("aaa", t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
   BOOST_CHECK_EQUAL(3, t1.getTarget()->getInt32("f", outputBuf));
-  BOOST_CHECK_EQUAL(0, strcmp("ef", t1.getTarget()->getVarcharPtr("g", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("efGHIJK", t1.getTarget()->getVarcharPtr("h", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("", t1.getTarget()->getVarcharPtr("i", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("bbbb dfee", t1.getTarget()->getVarcharPtr("j", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("bbbb dfee   ", t1.getTarget()->getVarcharPtr("k", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("    bbbb dfee", t1.getTarget()->getVarcharPtr("l", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("CDEFGHIJK", t1.getTarget()->getVarcharPtr("m", outputBuf)->Ptr));
-  BOOST_CHECK_EQUAL(0, strcmp("cdefghijk", t1.getTarget()->getVarcharPtr("n", outputBuf)->Ptr));
+  BOOST_CHECK_EQUAL(0, strcmp("ef", t1.getTarget()->getVarcharPtr("g", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("efGHIJK", t1.getTarget()->getVarcharPtr("h", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("", t1.getTarget()->getVarcharPtr("i", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("bbbb dfee", t1.getTarget()->getVarcharPtr("j", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("bbbb dfee   ", t1.getTarget()->getVarcharPtr("k", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("    bbbb dfee", t1.getTarget()->getVarcharPtr("l", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("CDEFGHIJK", t1.getTarget()->getVarcharPtr("m", outputBuf)->c_str()));
+  BOOST_CHECK_EQUAL(0, strcmp("cdefghijk", t1.getTarget()->getVarcharPtr("n", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(boost::algorithm::to_lower_copy(longStr),
+				       t1.getTarget()->getVarcharPtr("o", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(boost::algorithm::to_upper_copy(longStr),
+				       t1.getTarget()->getVarcharPtr("p", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(boost::algorithm::trim_copy(longStr),
+				       t1.getTarget()->getVarcharPtr("q", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(boost::algorithm::trim_right_copy(longStr),
+				       t1.getTarget()->getVarcharPtr("r", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(boost::algorithm::trim_left_copy(longStr),
+				       t1.getTarget()->getVarcharPtr("s", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("is is",
+				       t1.getTarget()->getVarcharPtr("t", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(substr2Expected,
+				       t1.getTarget()->getVarcharPtr("u", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(shortPlusLong,
+				       t1.getTarget()->getVarcharPtr("v", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longPlusShort,
+				       t1.getTarget()->getVarcharPtr("w", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longPlusLong,
+				       t1.getTarget()->getVarcharPtr("x", outputBuf)->c_str()));
   recordType->getFree().free(inputBuf);
   t1.getTarget()->getFree().free(outputBuf);
 }
@@ -4152,17 +4337,17 @@ BOOST_AUTO_TEST_CASE(testIQLRecordTransfer2IntegersWithCompoundNameVarchar)
     InterpreterContext runtimeCtxt;
     t1.execute(inputBuf, inputBuf2, outputBuf, &runtimeCtxt, false, false);
     BOOST_CHECK(boost::algorithm::equals("23", 
-					 t1.getTarget()->getVarcharPtr("a", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("230", 
-					 t1.getTarget()->getVarcharPtr("b", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("b", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("2300", 
-					 t1.getTarget()->getVarcharPtr("c", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("c", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("52", 
-					 t1.getTarget()->getVarcharPtr("d", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("d", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("520", 
-					 t1.getTarget()->getVarcharPtr("e", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("e", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("5200", 
-					 t1.getTarget()->getVarcharPtr("f", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("f", outputBuf)->c_str()));
     recordType->getFree().free(inputBuf);
     recordType2->getFree().free(inputBuf2);
     t1.getTarget()->getFree().free(outputBuf);
@@ -4185,13 +4370,13 @@ BOOST_AUTO_TEST_CASE(testIQLRecordTransfer2IntegersWithCompoundNameVarchar)
     InterpreterContext runtimeCtxt;
     t1.execute(inputBuf, inputBuf2, outputBuf, &runtimeCtxt, false, false);
     BOOST_CHECK(boost::algorithm::equals("23", 
-					 t1.getTarget()->getVarcharPtr("a", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("230", 
-					 t1.getTarget()->getVarcharPtr("b", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("b", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("2300", 
-					 t1.getTarget()->getVarcharPtr("c", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("c", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("5200", 
-					 t1.getTarget()->getVarcharPtr("f", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("f", outputBuf)->c_str()));
     recordType->getFree().free(inputBuf);
     recordType2->getFree().free(inputBuf2);
     t1.getTarget()->getFree().free(outputBuf);
@@ -4738,6 +4923,7 @@ void testInt64Cast(bool isNullable)
   members.push_back(RecordMember("f", DecimalType::Get(ctxt, isNullable)));
   members.push_back(RecordMember("g", DatetimeType::Get(ctxt, isNullable)));
   members.push_back(RecordMember("h", DateType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("i", VarcharType::Get(ctxt, isNullable)));
   RecordType recTy(members);
 
   RecordBuffer inputBuf = recTy.GetMalloc()->malloc();
@@ -4755,6 +4941,7 @@ void testInt64Cast(bool isNullable)
   recTy.setDatetime("g", dt, inputBuf);
   boost::gregorian::date d = boost::gregorian::from_string("2011-02-22");
   recTy.setDate("h", d, inputBuf);
+  recTy.setVarchar("i", "-771422222222222222", inputBuf);
 
   {
     RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
@@ -4766,6 +4953,7 @@ void testInt64Cast(bool isNullable)
 			  ", CAST(f AS BIGINT) AS f"
 			  ", CAST(g AS BIGINT) AS g"
 			  ", CAST(h AS BIGINT) AS h"
+			  ", CAST(i AS BIGINT) AS i"
 			  );
     for(RecordType::const_member_iterator it = t1.getTarget()->begin_members();
 	it != t1.getTarget()->end_members();
@@ -4784,6 +4972,7 @@ void testInt64Cast(bool isNullable)
     BOOST_CHECK_EQUAL(123457, t1.getTarget()->getInt64("f", outputBuf));
     BOOST_CHECK_EQUAL(20110217153833LL, t1.getTarget()->getInt64("g", outputBuf));
     BOOST_CHECK_EQUAL(20110222, t1.getTarget()->getInt64("h", outputBuf));
+    BOOST_CHECK_EQUAL(-771422222222222222LL, t1.getTarget()->getInt64("i", outputBuf));
     t1.getTarget()->getFree().free(outputBuf);
   }
 }
@@ -4992,6 +5181,8 @@ void testVarcharCast(bool isNullable)
   members.push_back(RecordMember("f", DecimalType::Get(ctxt, isNullable)));
   members.push_back(RecordMember("g", DatetimeType::Get(ctxt, isNullable)));
   members.push_back(RecordMember("h", DateType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("i", Int64Type::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("j", DecimalType::Get(ctxt, isNullable)));
   RecordType recTy(members);
 
   RecordBuffer inputBuf = recTy.GetMalloc()->malloc();
@@ -5009,6 +5200,12 @@ void testVarcharCast(bool isNullable)
   recTy.setDatetime("g", dt, inputBuf);
   boost::gregorian::date d = boost::gregorian::from_string("2011-02-22");
   recTy.setDate("h", d, inputBuf);
+  recTy.setInt64("i", 1239923432923442343LL, inputBuf);
+  decimal128 dec2;
+  ::decimal128FromString(&dec2,
+			 "1234563495284584.82342344", 
+			 runtimeCtxt.getDecimalContext());
+  recTy.getMemberOffset("j").setDecimal(dec2, inputBuf);
 
   {
     RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
@@ -5020,6 +5217,8 @@ void testVarcharCast(bool isNullable)
 			  ", CAST(f AS VARCHAR) AS f"
 			  ", CAST(g AS VARCHAR) AS g"
 			  ", CAST(h AS VARCHAR) AS h"
+			  ", CAST(i AS VARCHAR) AS i"
+			  ", CAST(j AS VARCHAR) AS j"
 			  );
     for(RecordType::const_member_iterator it = t1.getTarget()->begin_members();
 	it != t1.getTarget()->end_members();
@@ -5031,21 +5230,25 @@ void testVarcharCast(bool isNullable)
     InterpreterContext runtimeCtxt;
     t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
     BOOST_CHECK(boost::algorithm::equals("2011-03-12", 
-					 t1.getTarget()->getVarcharPtr("a", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("2011-03-16", 
-					 t1.getTarget()->getVarcharPtr("b", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("b", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("9923432", 
-					 t1.getTarget()->getVarcharPtr("c", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("c", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("1239923432", 
-					 t1.getTarget()->getVarcharPtr("d", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("d", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("8234.24344", 
-					 t1.getTarget()->getVarcharPtr("e", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("e", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("123456.8234", 
-					 t1.getTarget()->getVarcharPtr("f", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("f", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("2011-02-17 15:38:33", 
-					 t1.getTarget()->getVarcharPtr("g", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("g", outputBuf)->c_str()));
     BOOST_CHECK(boost::algorithm::equals("2011-02-22", 
-					 t1.getTarget()->getVarcharPtr("h", outputBuf)->Ptr));
+					 t1.getTarget()->getVarcharPtr("h", outputBuf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("1239923432923442343", 
+					 t1.getTarget()->getVarcharPtr("i", outputBuf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("1234563495284584.82342344", 
+					 t1.getTarget()->getVarcharPtr("j", outputBuf)->c_str()));
     t1.getTarget()->getFree().free(outputBuf);
   }
 }
@@ -5339,10 +5542,10 @@ BOOST_AUTO_TEST_CASE(testIQLGreaterLeast)
 
   BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
 		    t1.getTarget()->getMember("result13").GetType()->GetEnum());
-  BOOST_CHECK(boost::algorithm::equals("asdfkeekefe", t1.getTarget()->getMemberOffset("result13").getVarcharPtr(outputBuf)->Ptr));
+  BOOST_CHECK(boost::algorithm::equals("asdfkeekefe", t1.getTarget()->getMemberOffset("result13").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK_EQUAL(FieldType::VARCHAR, 
 		    t1.getTarget()->getMember("result14").GetType()->GetEnum());
-  BOOST_CHECK(boost::algorithm::equals("asdfwefkefe", t1.getTarget()->getMemberOffset("result14").getVarcharPtr(outputBuf)->Ptr));
+  BOOST_CHECK(boost::algorithm::equals("asdfwefkefe", t1.getTarget()->getMemberOffset("result14").getVarcharPtr(outputBuf)->c_str()));
 
   BOOST_CHECK_EQUAL(FieldType::INT64, 
 		    t1.getTarget()->getMember("result15").GetType()->GetEnum());
@@ -5633,7 +5836,7 @@ BOOST_AUTO_TEST_CASE(testIQLAddNullableVarchar)
   RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
   t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
   BOOST_CHECK(!t1.getTarget()->getFieldAddress("b").isNull(outputBuf));
-  BOOST_CHECK_EQUAL(0, strcmp(t1.getTarget()->getFieldAddress("b").getVarcharPtr(outputBuf)->Ptr,
+  BOOST_CHECK_EQUAL(0, strcmp(t1.getTarget()->getFieldAddress("b").getVarcharPtr(outputBuf)->c_str(),
 			      "Mary had a little lamb"));
   t1.getTarget()->GetFree()->free(outputBuf);
 
@@ -6395,6 +6598,7 @@ BOOST_AUTO_TEST_CASE(testStringLiteralEscapes)
 			", 'esc\\tape' AS e"
 			", 'esc\\rape' AS f"
 			", 'esc\\'ape' AS g"
+			", 'esc\\tape in a long heap allocated str\\'ng' AS h"
 			);
   
   InterpreterContext runtimeCtxt;
@@ -6402,19 +6606,21 @@ BOOST_AUTO_TEST_CASE(testStringLiteralEscapes)
   RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
   t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);  
   BOOST_CHECK(boost::algorithm::equals("noescapes",
-				       t1.getTarget()->getFieldAddress("a").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("a").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc\nape",
-				       t1.getTarget()->getFieldAddress("b").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("b").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc\bape",
-				       t1.getTarget()->getFieldAddress("c").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("c").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc\\ape",
-				       t1.getTarget()->getFieldAddress("d").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("d").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc\tape",
-				       t1.getTarget()->getFieldAddress("e").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("e").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc\rape",
-				       t1.getTarget()->getFieldAddress("f").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("f").getVarcharPtr(outputBuf)->c_str()));
   BOOST_CHECK(boost::algorithm::equals("esc'ape",
-				       t1.getTarget()->getFieldAddress("g").getVarcharPtr(outputBuf)->Ptr));
+				       t1.getTarget()->getFieldAddress("g").getVarcharPtr(outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("esc\tape in a long heap allocated str'ng",
+				       t1.getTarget()->getFieldAddress("h").getVarcharPtr(outputBuf)->c_str()));
   recTy.getFree().free(inputBuf);
   t1.getTarget()->getFree().free(outputBuf);
 }

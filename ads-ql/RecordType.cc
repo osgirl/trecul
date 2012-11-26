@@ -1191,7 +1191,7 @@ void TaggedFieldAddress::print(RecordBuffer buf, std::ostream& ostr) const
 
   switch(mTag) {
   case FieldType::VARCHAR:
-    ostr << mAddress.getVarcharPtr(buf)->Ptr;
+    ostr << mAddress.getVarcharPtr(buf)->c_str();
     break;
   case FieldType::CHAR:
     ostr << mAddress.getCharPtr(buf);
@@ -1292,8 +1292,9 @@ bool RecordTypeSerialize::doit(uint8_t * & output, uint8_t * outputEnd, RecordBu
       inputAvail = (buf.Ptr+mSize - inputPos.ptr);
     } else {
       Varchar * v = mOffsets[inputPos.offset-1].getVarcharPtr(buf);
+      BOOST_ASSERT(v->Large.Large);
       // Be careful to handle NULL terminator.
-      inputAvail = ((uint8_t *)v->Ptr + v->Size + 1 - inputPos.ptr);
+      inputAvail = ((uint8_t *)v->Large.Ptr + v->Large.Size + 1 - inputPos.ptr);
     }
     if (inputAvail > outputAvail) {
       memcpy(output, inputPos.ptr, outputAvail);
@@ -1306,15 +1307,16 @@ bool RecordTypeSerialize::doit(uint8_t * & output, uint8_t * outputEnd, RecordBu
       output += inputAvail;
 
       // Advance to next varchar, skip over any NULL
-      // strings.      
+      // strings and any Small strings
       while(1) {
 	inputPos.offset++;
 	if (mOffsets.size()<inputPos.offset) {
 	  inputPos.ptr = NULL;
 	  break;
-	} else if (!mOffsets[inputPos.offset-1].isNull(buf)) {
+	} else if (!mOffsets[inputPos.offset-1].isNull(buf) &&
+		   mOffsets[inputPos.offset-1].getVarcharPtr(buf)->Large.Large) {
 	  inputPos.ptr = 
-	    (uint8_t *) mOffsets[inputPos.offset-1].getVarcharPtr(buf)->Ptr;
+	    (uint8_t *) mOffsets[inputPos.offset-1].getVarcharPtr(buf)->Large.Ptr;
 	  break;
 	}
       }
@@ -1329,7 +1331,8 @@ std::size_t RecordTypeSerialize::getRecordLength(RecordBuffer buf) const
   for(std::vector<FieldAddress>::const_iterator it = mOffsets.begin();
       it != mOffsets.end();
       ++it) {
-    sz += std::size_t(it->getVarcharPtr(buf)->Size);
+    sz += std::size_t(it->getVarcharPtr(buf)->Large.Large ?
+		      it->getVarcharPtr(buf)->Large.Size : 0);
   }
   return sz;
 }
@@ -1361,25 +1364,27 @@ bool RecordTypeDeserialize::Do(uint8_t * & input, uint8_t * inputEnd, RecordBuff
       outputAvail = (buf.Ptr+mSize-outputPos.ptr);
     } else {
       Varchar * v = mOffsets[outputPos.offset-1].getVarcharPtr(buf);
+      BOOST_ASSERT(v->Large.Large);
       // Be careful to handle NULL terminator.
-      outputAvail = ((uint8_t *)v->Ptr + v->Size + 1 - outputPos.ptr);
+      outputAvail = ((uint8_t *)v->Large.Ptr + v->Large.Size + 1 - outputPos.ptr);
     }
     if (inputAvail >= outputAvail) {
       memcpy(outputPos.ptr, input, outputAvail);
       input += outputAvail;
       outputPos.ptr += outputAvail;
 
-      // Move to next non NULL VARCHAR
+      // Move to next non NULL Large VARCHAR
       while(1) {
 	outputPos.offset++;
 	if (outputPos.offset <= mOffsets.size()) {
-	  // Allocate memory and initialize pointer to it if not NULL
+	  // Allocate memory and initialize pointer to it if not NULL and Large
 	  // Size of string and NULL bit already copied from deserialized record.
-	  if (!mOffsets[outputPos.offset-1].isNull(buf)) {
+	  if (!mOffsets[outputPos.offset-1].isNull(buf) &&
+	      mOffsets[outputPos.offset-1].getVarcharPtr(buf)->Large.Large) {
 	    Varchar * v = mOffsets[outputPos.offset-1].getVarcharPtr(buf);
-	    char * tmp = (char *) ::malloc(v->Size + 1);
+	    char * tmp = (char *) ::malloc(v->Large.Size + 1);
 	    outputPos.ptr = (uint8_t *) tmp;
-	    v->Ptr = tmp;
+	    v->Large.Ptr = tmp;
 	    break;
 	  }
 	} else {
@@ -1422,7 +1427,9 @@ void RecordTypeFree::free(RecordBuffer buf) const
       it != mOffsets.end();
       ++it) {
     // Free
-    ::free(const_cast<char *>(it->getVarcharPtr(buf)->Ptr));
+    if (it->getVarcharPtr(buf)->Large.Large) {
+      ::free(const_cast<char *>(it->getVarcharPtr(buf)->Large.Ptr));
+    }
   }
   RecordBuffer::free(buf);
 }
@@ -1532,7 +1539,7 @@ void RecordType::Print(RecordBuffer buf, std::ostream& ostr) const
     // Not NULL so type dispatch
     switch(it->GetType()->GetEnum()) {
     case FieldType::VARCHAR:
-      ostr << mMemberOffsets[it-begin_members()].getVarcharPtr(buf)->Ptr;
+      ostr << mMemberOffsets[it-begin_members()].getVarcharPtr(buf)->c_str();
       break;
     case FieldType::CHAR:
       ostr << mMemberOffsets[it-begin_members()].getCharPtr(buf);

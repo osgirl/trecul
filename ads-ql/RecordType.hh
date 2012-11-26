@@ -67,8 +67,64 @@ class RecordType;
 // We require a C interface for these so LLVM can
 // call functions with these parameters.
 typedef struct {
-  int32_t Size;
+  bool Large : 1;
+  unsigned Size : 31;
   const char * Ptr;
+} VarcharLarge;
+
+typedef struct {
+  bool Large : 1;
+  unsigned Size : 7;
+  char Data[sizeof(VarcharLarge)-1];
+} VarcharSmall;
+
+typedef union tagVarchar {
+  enum Constants { MIN_LARGE_STRING_SIZE = sizeof(VarcharLarge)-1 };
+  VarcharLarge Large;
+  VarcharSmall Small;
+  char * allocateLarge(int32_t len, 
+		       class InterpreterContext * ctxt);
+  void assign(const char * lhs, int32_t len, 
+	      class InterpreterContext * ctxt)
+  {
+    char * buf;
+    if (len < MIN_LARGE_STRING_SIZE) {
+      buf = &Small.Data[0];
+      Small.Size = len;
+      Small.Large = 0;
+    } else {
+      buf = allocateLarge(len+1, ctxt);
+      Large.Size = len;
+      Large.Ptr = buf;  
+      Large.Large = 1;
+    }
+    ::memcpy(buf, lhs, len);
+    buf[len] = 0;
+  }
+  void assign(const char * lhs, int32_t len)
+  {
+    char * buf;
+    if (len < MIN_LARGE_STRING_SIZE) {
+      buf = &Small.Data[0];
+      Small.Size = len;
+      Small.Large = 0;
+    } else {
+      buf = (char *) ::malloc(len + 1);
+      Large.Size = len;
+      Large.Ptr = buf;  
+      Large.Large = 1;
+    }
+    ::memcpy(buf, lhs, len);
+    buf[len] = 0;
+  }
+  int32_t size() const
+  {
+    return Large.Large ? Large.Size : Small.Size;
+  }
+  const char * c_str() const
+  {
+    return Large.Large ? Large.Ptr : &Small.Data[0];
+  }
 } Varchar;
 
 class FieldAddress
@@ -204,11 +260,7 @@ public:
   {
     clearNull(buffer);
     Varchar * internalString =  (Varchar *) (buffer.Ptr + mOffset);
-    internalString->Size = sz;
-    char * tmp = (char *) ::malloc(sz + 1);
-    memcpy(tmp, begin, sz);
-    *(tmp + sz) = 0;
-    internalString->Ptr = tmp;
+    internalString->assign(begin, (int32_t) sz);
   }
   int32_t * getInt32Ptr(RecordBuffer buffer) const
   {

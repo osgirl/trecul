@@ -69,6 +69,7 @@ public:
 class DataflowMapReducer
 {
 private:
+  HadoopPipes::TaskContext & mContext;
   boost::shared_ptr<RuntimeProcess> mProcess;
   NativeInputQueueOperator * mInput;
   RuntimeHadoopEmitOperator * mEmit;
@@ -85,6 +86,10 @@ private:
    * be enough for that).
    */
   static const int64_t YIELD_AFTER = 100000;
+  /**
+   * Run the dataflow with progress calls back to MapReduce.
+   */
+  bool runSomeWithProgress();
 public:
   DataflowMapReducer(int32_t partition,
 		     int32_t numPartitions,
@@ -113,6 +118,7 @@ DataflowMapReducer::DataflowMapReducer(int32_t partition,
 				       HadoopPipes::TaskContext & context,
 				       bool isMap)
   : 
+  mContext(context),
   mInput(NULL), 
   mEmit(NULL),
   mRecordsQueued(0)
@@ -187,6 +193,10 @@ void DataflowMapReducer::getEncodedPlan(const std::string& planFileName,
 void DataflowMapReducer::map(HadoopPipes::TaskContext & ctxt,
 			     const std::string& val) 
 {
+  // We are relying on the context we were initialized with
+  // being valid in the close call.  Looking at the Pipes
+  // code we know this is true but double check.
+  BOOST_ASSERT(&ctxt == &mContext);
   typedef NativeInputQueueOperatorType::field_importer_const_iterator iterator;
   if (mInput) {
     StringDataBlock blk;
@@ -226,11 +236,7 @@ void DataflowMapReducer::map(HadoopPipes::TaskContext & ctxt,
     // In this case, make sure that we provide liveness notification
     // back to Hadoop since otherwise it will kill us after 10 minutes.
     std::cout << "Calling RuntimeProcess::runSome()" << std::endl;
-    DataflowScheduler::RunCompletion ret;
-    do {
-      ret = mProcess->runSome(YIELD_AFTER);
-      ctxt.progress();
-    } while(ret == DataflowScheduler::MAX_ITERATIONS_REACHED);
+    runSomeWithProgress();
     std::cout << "Calling RuntimeProcess::runComplete()" << std::endl;
     mProcess->runComplete();
     std::cout << "Finished calling RuntimeProcess::runComplete()" << std::endl;
@@ -242,11 +248,10 @@ void DataflowMapReducer::close()
 {
   if (mInput && mProcess.get() != NULL) {
     std::cout << "Calling RuntimeProcess::runSome() close" << std::endl;
-    // Send EOS into the flow and then join with the dataflow thread.
+    // Send EOS into the flow and then process.
     mInput->getQueue().push(RecordBuffer());
     mInput->onEvent(NULL);
-    bool ret = mProcess->runSome();
-    std::cout << "Finished calling RuntimeProcess::runSome" << std::endl;
+    bool ret = runSomeWithProgress();
     // runSome should only return when input queue is exhausted
     // in this case return should be true to signal that the flow
     // has completed (since we sent in EOS).
@@ -259,6 +264,16 @@ void DataflowMapReducer::close()
     mProcess->runComplete();
     std::cout << "Finished calling RuntimeProcess::runComplete() close" << std::endl;
   }
+}
+
+bool DataflowMapReducer::runSomeWithProgress()
+{
+  DataflowScheduler::RunCompletion ret;
+  do {
+    ret = mProcess->runSome(YIELD_AFTER);
+    mContext.progress();
+  } while(ret == DataflowScheduler::MAX_ITERATIONS_REACHED);
+  return ret == DataflowScheduler::NO_REQUESTS_OUTSTANDING;
 }
 
 class DataflowMap: public HadoopPipes::Mapper {

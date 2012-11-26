@@ -139,6 +139,65 @@ bool InterpreterContext::regex_match(const char* regex_source_c, const char* str
   return boost::regex_match(string, regex);
 }
 
+char * Varchar::allocateLarge(int32_t len, 
+			      InterpreterContext * ctxt)
+{
+  return (char *) ctxt->malloc(len);
+}
+
+void copyFromString(const char * lhs,
+		    int32_t len,
+		    Varchar * result,
+		    InterpreterContext * ctxt)
+{
+  result->assign(lhs, len, ctxt);
+}
+
+void copyFromString(const char * lhs,
+		    Varchar * result,
+		    InterpreterContext * ctxt)
+{
+  copyFromString(lhs, ::strlen(lhs), result, ctxt);
+}
+
+void copyFromString(boost::iterator_range<const char *> rng,
+		    Varchar * result,
+		    InterpreterContext * ctxt)
+{
+  int32_t len = (int32_t) std::distance(rng.begin(), rng.end());
+  copyFromString(rng.begin(), len, result, ctxt);
+}
+
+char * allocateVarcharBytes(Varchar * result,
+			    int32_t sz,
+			    InterpreterContext * ctxt)
+{
+  if (sz < Varchar::MIN_LARGE_STRING_SIZE) {
+    result->Small.Size = sz;
+    result->Small.Large = 0;
+    return &result->Small.Data[0];
+  } else {
+    result->Large.Size = sz;
+    char * buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    result->Large.Ptr = buf;
+    result->Large.Large = 1;
+    return buf;
+  }
+}
+
+void getVarcharRange(const Varchar * in,
+		     const char * & ptr,
+		     unsigned & sz)
+{
+  if (!in->Large.Large) {
+    ptr = &in->Small.Data[0];
+    sz = in->Small.Size;
+  } else {
+    ptr = in->Large.Ptr;
+    sz = in->Large.Size;
+  }
+}
+
 // TODO: Add the Int64 stuff to decNumber.c
 /* ------------------------------------------------------------------ */
 /* decGetDigits -- count digits in a Units array                      */
@@ -335,7 +394,7 @@ extern "C" void InternalDecimalFromVarchar(const Varchar * arg,
 					   decimal128 * ret,
 					   InterpreterContext * ctxt) 
 {
-  ::decimal128FromString(ret, arg->Ptr, ctxt->getDecimalContext());
+  ::decimal128FromString(ret, arg->c_str(), ctxt->getDecimalContext());
 }
 
 extern "C" void InternalDecimalFromChar(const char * arg,
@@ -403,65 +462,125 @@ extern "C" void InternalDecimalRound(decimal128 * lhs, int32_t precision, decima
 }
 
 extern "C" void InternalVarcharAdd(Varchar* lhs, Varchar* rhs, Varchar* result, InterpreterContext * ctxt) {
-  result->Size = lhs->Size + rhs->Size;
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  memcpy(buf, lhs->Ptr, lhs->Size);
-  memcpy(buf+lhs->Size, rhs->Ptr, rhs->Size);
-  buf[lhs->Size + rhs->Size] = 0;
-  result->Ptr = buf;
+  char * buf = NULL;
+  switch(lhs->Large.Large | (rhs->Large.Large << 1)) {
+  case 0:
+    buf = allocateVarcharBytes(result, lhs->Small.Size+rhs->Small.Size, ctxt);
+    memcpy(buf, &lhs->Small.Data[0], lhs->Small.Size);
+    memcpy(buf+lhs->Small.Size, &rhs->Small.Data[0], rhs->Small.Size);
+    buf[lhs->Small.Size + rhs->Small.Size] = 0;
+    break;
+  case 1:
+    result->Large.Size = lhs->Large.Size + rhs->Small.Size;
+    buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    memcpy(buf, lhs->Large.Ptr, lhs->Large.Size);
+    memcpy(buf+lhs->Large.Size, &rhs->Small.Data[0], rhs->Small.Size);
+    buf[lhs->Large.Size + rhs->Small.Size] = 0;
+    result->Large.Ptr = buf;
+    result->Large.Large = 1;
+    break;
+  case 2:
+    result->Large.Size = lhs->Small.Size + rhs->Large.Size;
+    buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    memcpy(buf, &lhs->Small.Data[0], lhs->Small.Size);
+    memcpy(buf+lhs->Small.Size, rhs->Large.Ptr, rhs->Large.Size);
+    buf[lhs->Small.Size + rhs->Large.Size] = 0;
+    result->Large.Ptr = buf;
+    result->Large.Large = 1;
+    break;
+  case 3:
+    result->Large.Size = lhs->Large.Size + rhs->Large.Size;
+    buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    memcpy(buf, lhs->Large.Ptr, lhs->Large.Size);
+    memcpy(buf+lhs->Large.Size, rhs->Large.Ptr, rhs->Large.Size);
+    buf[lhs->Large.Size + rhs->Large.Size] = 0;
+    result->Large.Ptr = buf;
+    result->Large.Large = 1;
+    break;
+  }
 }
 
 extern "C" void InternalVarcharCopy(Varchar * lhs, Varchar * result, int32_t trackForDelete, InterpreterContext * ctxt) {
-  result->Size = lhs->Size;
-  char * buf = trackForDelete ? (char *) ctxt->malloc(result->Size + 1) : (char*) ::malloc(result->Size + 1);
-  memcpy(buf, lhs->Ptr, lhs->Size);
-  buf[lhs->Size] = 0;
-  result->Ptr = buf;
+  if (!lhs->Large.Large) {
+    result->Small = lhs->Small;
+  } else {
+    result->Large.Large = lhs->Large.Large;
+    result->Large.Size = lhs->Large.Size;
+    char * buf = trackForDelete ? 
+      (char *) ctxt->malloc(result->Large.Size + 1) : 
+      (char*) ::malloc(result->Large.Size + 1);
+    memcpy(buf, lhs->Large.Ptr, lhs->Large.Size);
+    buf[lhs->Large.Size] = 0;
+    result->Large.Ptr = buf;
+  }
 }
 
 extern "C" void InternalVarcharErase(Varchar * lhs, InterpreterContext * ctxt) {
   // Remove varchar pointer from internal heap tracking
-  ctxt->erase(const_cast<char *>(lhs->Ptr));
+  if (lhs->Large.Large) {
+    ctxt->erase(const_cast<char *>(lhs->Large.Ptr));
+  }
 }
 
 extern "C" int32_t InternalVarcharEquals(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  return lhs->Size == rhs->Size && 0 == memcmp(lhs->Ptr, rhs->Ptr, lhs->Size);
+  if (lhs->Large.Large) {
+    return rhs->Large.Large && lhs->Large.Size == rhs->Large.Size && 
+      0 == memcmp(lhs->Large.Ptr, rhs->Large.Ptr, lhs->Large.Size);
+  } else {
+    return 0 == rhs->Large.Large && lhs->Small.Size == rhs->Small.Size && 
+      0 == memcmp(&lhs->Small.Data[0], &rhs->Small.Data[0], lhs->Small.Size);
+  }
 }
 
 extern "C" int32_t InternalVarcharNE(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  return lhs->Size != rhs->Size || 0 != memcmp(lhs->Ptr, rhs->Ptr, lhs->Size);
+  if (lhs->Large.Large) {
+    return !rhs->Large.Large || lhs->Large.Size != rhs->Large.Size || 
+      0 != memcmp(lhs->Large.Ptr, rhs->Large.Ptr, lhs->Large.Size);
+  } else {
+    return rhs->Large.Large || lhs->Small.Size != rhs->Small.Size || 
+      0 != memcmp(&lhs->Small.Data[0], &rhs->Small.Data[0], lhs->Small.Size);
+  }
 }
 
 extern "C" int32_t InternalVarcharLT(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  int cmp = strcmp(lhs->Ptr, rhs->Ptr);
+  int cmp = strcmp(lhs->c_str(), rhs->c_str());
   return cmp < 0;
 }
 
 extern "C" int32_t InternalVarcharLE(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  int cmp = strcmp(lhs->Ptr, rhs->Ptr);
+  int cmp = strcmp(lhs->c_str(), rhs->c_str());
   return cmp <= 0;
 }
 
 extern "C" int32_t InternalVarcharGT(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  int cmp = strcmp(lhs->Ptr, rhs->Ptr);
+  int cmp = strcmp(lhs->c_str(), rhs->c_str());
   return cmp > 0;
 }
 
 extern "C" int32_t InternalVarcharGE(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  int cmp = strcmp(lhs->Ptr, rhs->Ptr);
+  int cmp = strcmp(lhs->c_str(), rhs->c_str());
   return cmp >= 0;
 }
 
 extern "C" int32_t InternalVarcharRLike(Varchar* lhs, Varchar* rhs, InterpreterContext * ctxt) {
-  return ctxt->regex_match(rhs->Ptr, lhs->Ptr);
+  return ctxt->regex_match(rhs->c_str(), lhs->c_str());
 }
 
 extern "C" void InternalCharFromVarchar(Varchar* in, char * out, int32_t outSz) {
-  if (outSz <= in->Size) {
-    memcpy(out, in->Ptr, outSz);
+  if (in->Large.Large) {
+    if (outSz <= in->Large.Size) {
+      memcpy(out, in->Large.Ptr, outSz);
+    } else {
+      memcpy(out, in->Large.Ptr, in->Large.Size);
+      memset(out+in->Large.Size, ' ', outSz-in->Large.Size);
+    }
   } else {
-    memcpy(out, in->Ptr, in->Size);
-    memset(out+in->Size, ' ', outSz-in->Size);
+    if (outSz <= in->Small.Size) {
+      memcpy(out, &in->Small.Data[0], outSz);
+    } else {
+      memcpy(out, &in->Small.Data[0], in->Small.Size);
+      memset(out+in->Small.Size, ' ', outSz-in->Small.Size);
+    }
   }
   // Null terminate.
   out[outSz] = 0;
@@ -475,89 +594,102 @@ extern "C" void substr(Varchar* lhs,
   // Size of the result.
   if (len < 0) len = std::numeric_limits<int32_t>::max();
   // If start is too big then return empty string.
-  if (lhs->Size <= start) {
-    start = lhs->Size;
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  if (sz <= start) {
+    start = sz;
     len = 0;
   }
-  result->Size = std::min(len, lhs->Size - start);
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  memcpy(buf, lhs->Ptr+start, result->Size);
-  buf[result->Size] = 0;
-  result->Ptr = buf;
+  unsigned resultSz  = std::min((unsigned) len, sz - start);
+  copyFromString(ptr+start, resultSz, result, ctxt);
 }
 
 extern "C" void trim(Varchar* lhs, 
 		     Varchar * result,
 		     InterpreterContext * ctxt) {
-  boost::iterator_range<const char*> rng(lhs->Ptr, lhs->Ptr+lhs->Size);
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  boost::iterator_range<const char*> rng(ptr, ptr+sz);
   rng = boost::trim_copy(rng);
-  result->Size = (int32_t) std::distance(rng.begin(), rng.end());
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  std::copy(rng.begin(), rng.end(), buf);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  copyFromString(rng, result, ctxt);
 }
 
 extern "C" void ltrim(Varchar* lhs, 
 		     Varchar * result,
 		     InterpreterContext * ctxt) {
-  boost::iterator_range<const char*> rng(lhs->Ptr, lhs->Ptr+lhs->Size);
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  boost::iterator_range<const char*> rng(ptr, ptr+sz);
   rng = boost::trim_left_copy(rng);
-  result->Size = (int32_t) std::distance(rng.begin(), rng.end());
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  std::copy(rng.begin(), rng.end(), buf);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  copyFromString(rng, result, ctxt);
 }
 
 extern "C" void rtrim(Varchar* lhs, 
 		     Varchar * result,
 		     InterpreterContext * ctxt) {
-  boost::iterator_range<const char*> rng(lhs->Ptr, lhs->Ptr+lhs->Size);
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  boost::iterator_range<const char*> rng(ptr, ptr+sz);
   rng = boost::trim_right_copy(rng);
-  result->Size = (int32_t) std::distance(rng.begin(), rng.end());
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  std::copy(rng.begin(), rng.end(), buf);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  copyFromString(rng, result, ctxt);
 }
 
 extern "C" void lower(Varchar* lhs, 
 		     Varchar * result,
 		     InterpreterContext * ctxt) {
-  result->Size = lhs->Size;
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  boost::iterator_range<const char*> rng(lhs->Ptr, lhs->Ptr+lhs->Size);
-  boost::to_lower_copy(buf, rng);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  if (lhs->Large.Large) {
+    result->Large.Size = lhs->Large.Size;
+    char * buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    boost::iterator_range<const char*> rng(lhs->Large.Ptr, 
+					   lhs->Large.Ptr+lhs->Large.Size);
+    boost::to_lower_copy(buf, rng);
+    buf[result->Large.Size] = 0;
+    result->Large.Ptr = buf;  
+    result->Large.Large = 1;
+  } else {
+    result->Small.Size = lhs->Small.Size;
+    boost::iterator_range<const char*> rng(&lhs->Small.Data[0], 
+					   &lhs->Small.Data[0]+lhs->Small.Size);
+    boost::to_lower_copy(&result->Small.Data[0], rng);
+    result->Small.Data[result->Small.Size] = 0;
+    result->Small.Large = 0;
+  }
 }
 
 extern "C" void upper(Varchar* lhs, 
 		     Varchar * result,
 		     InterpreterContext * ctxt) {
-  result->Size = lhs->Size;
-  char * buf = (char *) ctxt->malloc(result->Size + 1);
-  boost::iterator_range<const char*> rng(lhs->Ptr, lhs->Ptr+lhs->Size);
-  boost::to_upper_copy(buf, rng);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  if (lhs->Large.Large) {
+    result->Large.Size = lhs->Large.Size;
+    char * buf = (char *) ctxt->malloc(result->Large.Size + 1);
+    boost::iterator_range<const char*> rng(lhs->Large.Ptr, 
+					   lhs->Large.Ptr+lhs->Large.Size);
+    boost::to_upper_copy(buf, rng);
+    buf[result->Large.Size] = 0;
+    result->Large.Ptr = buf;  
+    result->Large.Large = 1;
+  } else {
+    result->Small.Size = lhs->Small.Size;
+    boost::iterator_range<const char*> rng(&lhs->Small.Data[0], 
+					   &lhs->Small.Data[0]+lhs->Small.Size);
+    boost::to_upper_copy(&result->Small.Data[0], rng);
+    result->Small.Data[result->Small.Size] = 0;
+    result->Small.Large = 0;
+  }
 }
 
 extern "C" int32_t length(Varchar* lhs) {
-  return lhs->Size;
+  return lhs->size();
 }
 
 extern "C" void InternalVarcharFromChar(const char * lhs, 
 					Varchar * result,
 					InterpreterContext * ctxt) {
-  int32_t len = ::strlen(lhs);
-  boost::iterator_range<const char*> rng(lhs, lhs+len);
-  result->Size = len;
-  char * buf = (char *) ctxt->malloc(len + 1);
-  std::copy(rng.begin(), rng.end(), buf);
-  buf[result->Size] = 0;
-  result->Ptr = buf;  
+  copyFromString(lhs, result, ctxt);
 }
 
 extern "C" void InternalVarcharFromInt32(int32_t val,
@@ -565,10 +697,15 @@ extern "C" void InternalVarcharFromInt32(int32_t val,
 					InterpreterContext * ctxt) 
 {
   // 10 digits + trailing EOS + optional - 
-  char * buf = (char *) ctxt->malloc(12);
-  sprintf(buf, "%d", val);
-  result->Size = strlen(buf);
-  result->Ptr = buf;  
+  if (11 < Varchar::MIN_LARGE_STRING_SIZE) {
+    sprintf(&result->Small.Data[0], "%d", val);
+    result->Small.Size = strlen(&result->Small.Data[0]);
+    result->Small.Large = 0;
+  } else {
+    char buf[12];
+    sprintf(buf, "%d", val);
+    copyFromString(&buf[0], result, ctxt);
+  }
 }
 
 extern "C" void InternalVarcharFromInt64(int64_t val,
@@ -576,63 +713,67 @@ extern "C" void InternalVarcharFromInt64(int64_t val,
 					InterpreterContext * ctxt) 
 {
   // 20 digits + trailing EOS + optional - 
-  char * buf = (char *) ctxt->malloc(22);
+  char buf[22];
   // Cast to hush warnings from gcc
   sprintf(buf, "%lld", (long long int) val);
-  result->Size = strlen(buf);
-  result->Ptr = buf;  
+  copyFromString(&buf[0], result, ctxt);
 }
 
 extern "C" void InternalVarcharFromDecimal(decimal128 * val,
 					   Varchar * result,
 					   InterpreterContext * ctxt) 
 {
-  char * buf = (char *) ctxt->malloc(DECIMAL128_String + 1);
+  char buf[DECIMAL128_String + 1];
   ::decimal128ToString(val, buf);
-  result->Size = strlen(buf);
-  result->Ptr = buf;  
+  copyFromString(&buf[0], result, ctxt);
 }
 
 extern "C" void InternalVarcharFromDouble(double val,
 					  Varchar * result,
 					  InterpreterContext * ctxt) 
 {
-  char * buf = (char *) ctxt->malloc(64);
+  char buf[64];
   sprintf(buf, "%.15g", val);
-  result->Size = strlen(buf);
-  result->Ptr = buf;  
+  copyFromString(&buf[0], result, ctxt);
 }
 
 extern "C" void InternalVarcharFromDate(boost::gregorian::date d,
 					Varchar * result,
 					InterpreterContext * ctxt) 
 {
-  char * buf = (char *) ctxt->malloc(11);
-  boost::gregorian::greg_year_month_day parts = d.year_month_day();
-  sprintf(buf, "%04d-%02d-%02d", (int32_t) parts.year, (int32_t) parts.month,
-	  (int32_t) parts.day);
-  result->Size = 10;
-  result->Ptr = buf;  
+  if (10 < Varchar::MIN_LARGE_STRING_SIZE) {
+    char * buf = &result->Small.Data[0];
+    boost::gregorian::greg_year_month_day parts = d.year_month_day();
+    sprintf(buf, "%04d-%02d-%02d", (int32_t) parts.year, 
+	    (int32_t) parts.month, (int32_t) parts.day);
+    result->Small.Size = 10;
+    result->Small.Large = 0;
+  } else {
+    char buf[11];
+    boost::gregorian::greg_year_month_day parts = d.year_month_day();
+    sprintf(buf, "%04d-%02d-%02d", (int32_t) parts.year, 
+	    (int32_t) parts.month, (int32_t) parts.day);
+    copyFromString(&buf[0], result, ctxt);
+  }
 }
 
 extern "C" void InternalVarcharFromDatetime(boost::posix_time::ptime t,
 					    Varchar * result,
 					    InterpreterContext * ctxt) 
 {
-  char * buf = (char *) ctxt->malloc(20);
+  char buf[20];
   boost::gregorian::greg_year_month_day parts = t.date().year_month_day();
   boost::posix_time::time_duration dur = t.time_of_day();
   sprintf(buf, "%04d-%02d-%02d %02d:%02d:%02d", (int32_t) parts.year, (int32_t) parts.month,
 	  (int32_t) parts.day, dur.hours(), dur.minutes(), dur.seconds());
-  result->Size = 19;
-  result->Ptr = buf;  
+  copyFromString(&buf[0], result, ctxt);
 }
 
 extern "C" void InternalInt32FromVarchar(const Varchar * arg,
 					 int32_t * ret,
 					 InterpreterContext * ctxt) 
 {
-  *ret = atoi(arg->Ptr);
+  *ret = atoi(arg->c_str());
 }
 
 extern "C" void InternalInt32FromChar(const char * arg,
@@ -675,7 +816,7 @@ extern "C" void InternalInt64FromVarchar(const Varchar * arg,
 					 int64_t * ret,
 					 InterpreterContext * ctxt) 
 {
-  *ret = std::strtoll(arg->Ptr, NULL, 10);
+  *ret = std::strtoll(arg->c_str(), NULL, 10);
 }
 
 extern "C" void InternalInt64FromChar(const char * arg,
@@ -722,7 +863,7 @@ extern "C" void InternalDoubleFromVarchar(const Varchar * arg,
 					  double * ret,
 					  InterpreterContext * ctxt) 
 {
-  *ret = atof(arg->Ptr);
+  *ret = atof(arg->c_str());
 }
 
 extern "C" void InternalDoubleFromChar(const char * arg,
@@ -762,8 +903,8 @@ extern "C" void InternalDoubleFromDatetime(boost::posix_time::ptime arg,
   *ret = tmp;
 }
 
-extern "C" boost::gregorian::date InternalDateFromVarchar(Varchar* lhs) {
-  return boost::gregorian::from_string(lhs->Ptr);
+extern "C" boost::gregorian::date InternalDateFromVarchar(Varchar* arg) {
+  return boost::gregorian::from_string(arg->c_str());
 }
 
 extern "C" boost::gregorian::date date(boost::posix_time::ptime t) {
@@ -805,9 +946,12 @@ extern "C" int32_t julian_day(boost::gregorian::date a) {
 }
 
 extern "C" boost::posix_time::ptime InternalDatetimeFromVarchar(Varchar* lhs) {
-  return lhs->Size == 10 ?
-    boost::posix_time::ptime(boost::gregorian::from_string(lhs->Ptr)) :
-    boost::posix_time::time_from_string(lhs->Ptr);
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  return sz == 10 ?
+    boost::posix_time::ptime(boost::gregorian::from_string(ptr)) :
+    boost::posix_time::time_from_string(ptr);
 }
 
 extern "C" boost::posix_time::ptime InternalDatetimeFromDate(boost::gregorian::date lhs) {
@@ -1137,10 +1281,11 @@ void LLVMBase::InitializeLLVM()
   mContext->LLVMDecimal128Type = LLVMStructTypeInContext(mContext->LLVMContext, &decimal128Members[0], DECIMAL128_Bytes/sizeof(int32_t), 1);
 
   // Set up VARCHAR type
-  LLVMTypeRef varcharMembers[2];
+  LLVMTypeRef varcharMembers[3];
   varcharMembers[0] = LLVMInt32TypeInContext(mContext->LLVMContext);
-  varcharMembers[1] = LLVMPointerType(LLVMInt8TypeInContext(mContext->LLVMContext), 0);
-  mContext->LLVMVarcharType = LLVMStructTypeInContext(mContext->LLVMContext, &varcharMembers[0], 2, 0);
+  varcharMembers[1] = LLVMInt32TypeInContext(mContext->LLVMContext);
+  varcharMembers[2] = LLVMPointerType(LLVMInt8TypeInContext(mContext->LLVMContext), 0);
+  mContext->LLVMVarcharType = LLVMStructTypeInContext(mContext->LLVMContext, &varcharMembers[0], 3, 0);
   // DATETIME runtime type
   mContext->LLVMDatetimeType = LLVMInt64TypeInContext(mContext->LLVMContext);
 

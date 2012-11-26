@@ -1202,7 +1202,7 @@ void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
     } else {
       RecordBuffer output;
       getHdfsWriteType().mTransfer->execute(input, output, mRuntimeContext, false);
-      std::string fileName(getHdfsWriteType().mTransferOutput->getVarcharPtr(output)->Ptr);
+      std::string fileName(getHdfsWriteType().mTransferOutput->getVarcharPtr(output)->c_str());
       getHdfsWriteType().mTransferFree->free(output);
       mRuntimeContext->clear();
       std::map<std::string, OutputFile *>::iterator it = mFile.find(fileName);

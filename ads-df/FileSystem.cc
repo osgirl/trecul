@@ -729,9 +729,9 @@ void SerialOrganizedTable::bindComponent(FileSystem * fs,
       }
       bool good = mPredicate ?
 	mPredicate->execute(buf, RecordBuffer(), mRuntimeContext) : true;
-      const char * minorVersionStr = mFields[mMinorVersionField].getVarcharPtr(buf)->Ptr;
+      const char * minorVersionStr = mFields[mMinorVersionField].getVarcharPtr(buf)->c_str();
       int32_t minorVersion = boost::lexical_cast<int32_t>(minorVersionStr);
-      std::string dateStr(mFields[mDateField].getVarcharPtr(buf)->Ptr);
+      std::string dateStr(mFields[mDateField].getVarcharPtr(buf)->c_str());
       mRecordType->getFree().free(buf);
       if (good)
 	mSerialPaths.push_back(SerialOrganizedTableFile::get(minorVersion, dateStr,
