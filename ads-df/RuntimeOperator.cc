@@ -1051,12 +1051,16 @@ RuntimeGenerateOperatorType::RuntimeGenerateOperatorType(DynamicRecordContext & 
   mStateMalloc = stateType.getMalloc();
   mStateFree = stateType.getFree();
   mInputFree = emptyType.getFree();
+
+  std::vector<AliasedRecordType> inputAndEmpty;
+  inputAndEmpty.push_back(AliasedRecordType("input", &emptyType));
+  inputAndEmpty.push_back(AliasedRecordType("input", &emptyType));
+  RecordTypeFunction f(ctxt, "myLoopUpperBound", inputAndEmpty, 
+		       boost::lexical_cast<std::string>(upperBound));
+
   std::vector<AliasedRecordType> inputAndState;
   inputAndState.push_back(AliasedRecordType("input", &emptyType));
-  RecordTypeFunction f(ctxt, "myLoopUpperBound", inputAndState, 
-		       boost::lexical_cast<std::string>(upperBound));
   inputAndState.push_back(AliasedRecordType("state", &stateType));
-
   mTransfer = new RecordTypeTransfer2(ctxt, "myGenerate", inputAndState, prog);
   mModule = mTransfer->create();
   mLoopUpperBound = f.create();

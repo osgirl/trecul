@@ -1487,10 +1487,10 @@ BOOST_AUTO_TEST_CASE(testCompare1)
   members.push_back(RecordMember("akid", CharType::Get(ctxt, 22)));
   members.push_back(RecordMember("coop_id", Int32Type::Get(ctxt)));
   RecordType recTy (members);
-  std::vector<std::string> fields;
-  fields.push_back("akid");
+  std::vector<SortKey> fields;
+  fields.push_back(SortKey("akid"));
   
-  RecordTypeFunction * lessThan = SortMergeJoin::createMemcmpFunction(ctxt, fields, &recTy, fields, &recTy);
+  RecordTypeFunction * lessThan = CompareFunction::get(ctxt, &recTy, &recTy, fields, fields);
   InterpreterContext runtimeCtxt;
   
   boost::gregorian::date d1 = boost::gregorian::from_string("2011-04-07");
@@ -1530,12 +1530,12 @@ BOOST_AUTO_TEST_CASE(testCompare3)
   members.push_back(RecordMember("akid", CharType::Get(ctxt, 22)));
   members.push_back(RecordMember("coop_id", Int32Type::Get(ctxt)));
   RecordType recTy (members);
-  std::vector<std::string> fields;
-  fields.push_back("akid");
-  fields.push_back("coop_id");
-  fields.push_back("cre_date");
+  std::vector<SortKey> fields;
+  fields.push_back(SortKey("akid"));
+  fields.push_back(SortKey("coop_id"));
+  fields.push_back(SortKey("cre_date"));
   
-  RecordTypeFunction * lessThan = SortMergeJoin::createMemcmpFunction(ctxt, fields, &recTy, fields, &recTy);
+  RecordTypeFunction * lessThan = CompareFunction::get(ctxt, &recTy, &recTy, fields, fields);
   InterpreterContext runtimeCtxt;
   
   boost::gregorian::date d1 = boost::gregorian::from_string("2011-04-07");
@@ -1699,10 +1699,10 @@ BOOST_AUTO_TEST_CASE(testCompareNull)
   members.push_back(RecordMember("akid", CharType::Get(ctxt, 22, true)));
   members.push_back(RecordMember("coop_id", Int32Type::Get(ctxt, true)));
   RecordType recTy (members);
-  std::vector<std::string> fields;
-  fields.push_back("akid");
+  std::vector<SortKey> fields;
+  fields.push_back(SortKey("akid"));
   
-  RecordTypeFunction * lessThan = SortMergeJoin::createMemcmpFunction(ctxt, fields, &recTy, fields, &recTy);
+  RecordTypeFunction * lessThan = CompareFunction::get(ctxt, &recTy, &recTy, fields, fields);
   InterpreterContext runtimeCtxt;
   
   boost::gregorian::date d1 = boost::gregorian::from_string("2011-04-07");
@@ -2259,11 +2259,11 @@ BOOST_AUTO_TEST_CASE(testSortMergeJoin)
 {
   DynamicRecordContext ctxt;
   RuntimeGenerateOperatorType * leftType = new RuntimeGenerateOperatorType(ctxt, "2*RECORDCOUNT AS a", 5);
-  std::vector<std::string> leftKeys;
-  leftKeys.push_back("a");
+  std::vector<SortKey> leftKeys;
+  leftKeys.push_back(SortKey("a"));
   RuntimeGenerateOperatorType * rightType = new RuntimeGenerateOperatorType(ctxt, "RECORDCOUNT AS b", 10);
-  std::vector<std::string> rightKeys;
-  rightKeys.push_back("b");
+  std::vector<SortKey> rightKeys;
+  rightKeys.push_back(SortKey("b"));
   
   SortMergeJoin smj(ctxt, 
 		    SortMergeJoin::RIGHT_OUTER,
