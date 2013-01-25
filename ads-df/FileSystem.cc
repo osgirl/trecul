@@ -167,6 +167,12 @@ const char * URI::getDefaultScheme()
   return "file";
 }
 
+std::ostream& operator<<(std::ostream& str, const URI& val)
+{
+  str << val.toString().c_str();
+  return str;
+}
+
 Path::Path(const std::string& str)
   :
   mUri(boost::make_shared<URI>(str.c_str()))
@@ -212,9 +218,15 @@ PathPtr Path::get(const std::string& parent,
   return get(get(parent), get(child));
 }
 
-const std::string& Path::toString()
+const std::string& Path::toString() const
 {
   return mUri->toString();
+}
+
+std::ostream& operator<<(std::ostream& str, const Path& val)
+{
+  str << val.toString().c_str();
+  return str;
 }
 
 static boost::mutex sFileSystemFactoryGuard;

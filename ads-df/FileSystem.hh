@@ -131,6 +131,8 @@ public:
   static const char * getDefaultScheme();
 };
 
+std::ostream& operator<<(std::ostream& str, const URI& val);
+
 typedef boost::shared_ptr<class Path> PathPtr;
 
 class Path : boost::noncopyable
@@ -160,8 +162,10 @@ public:
 		     const std::string& child);
 
   UriPtr getUri() const { return mUri; }
-  const std::string& toString();
+  const std::string& toString() const;
 };
+
+std::ostream& operator<<(std::ostream& str, const Path& val);
 
 class FileStatus
 {

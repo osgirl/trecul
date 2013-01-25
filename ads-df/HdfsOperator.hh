@@ -65,7 +65,8 @@ class HdfsFileSystem : public FileSystem
 {
 private:
   // Use pimpl idiom to hide HDFS interface.
-  class HdfsFileSystemImpl * mImpl;
+  boost::shared_ptr<class HdfsFileSystemImpl> mImpl;
+  PathPtr mUri;
 public:
   HdfsFileSystem(const std::string& uri);
   HdfsFileSystem(UriPtr uri);

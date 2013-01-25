@@ -45,70 +45,159 @@
 #include "HdfsOperator.hh"
 #include "RecordParser.hh"
 
-class hdfs_file_handle
-{
-public:
-  hdfsFS FileSystem;
-  hdfsFile File;
-  uint64_t End;
-  hdfs_file_handle()
-    :
-    FileSystem(NULL),
-    File(NULL),
-    End(std::numeric_limits<uint64_t>::max())
-  {
-  }
+typedef boost::shared_ptr<class HdfsFileSystem> HdfsFileSystemPtr;
+typedef boost::shared_ptr<class HdfsFileSystemImpl> HdfsFileSystemImplPtr;
 
-  static int32_t write(hdfsFS fs, hdfsFile f, const void * buf, int32_t sz)
+class HdfsFileSystemImpl
+{
+private:
+  static boost::mutex fsCacheGuard;
+  static std::map<std::string, HdfsFileSystemImplPtr > fsCache;
+
+  hdfsFS mFileSystem;
+  
+  boost::shared_ptr<FileStatus> createFileStatus(hdfsFileInfo& fi);
+  HdfsFileSystemImpl(UriPtr uri);
+public:
+  static HdfsFileSystemImplPtr get(UriPtr uri);
+  ~HdfsFileSystemImpl();
+
+  PathPtr transformDefaultUri(PathPtr p);
+
+  boost::shared_ptr<FileStatus> getStatus(PathPtr p);
+  bool exists(PathPtr p);
+  bool removeAll(PathPtr p);
+  bool remove(PathPtr p);
+
+  void list(PathPtr p,
+	    std::vector<boost::shared_ptr<FileStatus> >& result);
+  void readFile(UriPtr uri, std::string& out);
+
+  int32_t write(hdfsFile f, const void * buf, int32_t sz)
   {
-    tSize ret = ::hdfsWrite(fs, f, buf, sz);
+    tSize ret = ::hdfsWrite(mFileSystem, f, buf, sz);
     if (ret == -1) {
       throw std::runtime_error("hdfsWrite failed");
     }
     return (int32_t) ret;
   }
-  static void flush(hdfsFS fs, hdfsFile f)
+  int32_t read(hdfsFile f, void * buf, int32_t sz)
   {
-    int ret = ::hdfsFlush(fs, f);
+    tSize ret = ::hdfsRead(mFileSystem, f, buf, sz);
+    if (ret == -1) {
+      throw std::runtime_error("hdfsRead failed");
+    }
+    return (int32_t) ret;
+  }
+  void flush(hdfsFile f)
+  {
+    int ret = ::hdfsFlush(mFileSystem, f);
     if (ret == -1) {
       throw std::runtime_error("hdfsFlush failed");
     }
   }
-  static void close(hdfsFS fs, hdfsFile f)
+  void close(hdfsFile f)
   {
-    int ret = ::hdfsCloseFile(fs, f);
+    int ret = ::hdfsCloseFile(mFileSystem, f);
     if (ret == -1) {
       throw std::runtime_error("hdfsCloseFile failed");
     }
   }
-  static void close(hdfsFS fs, hdfsFile f, int& ret)
+  void close(hdfsFile f, int& ret)
   {
-    ret = ::hdfsCloseFile(fs, f);
+    ret = ::hdfsCloseFile(mFileSystem, f);
+  }
+  uint64_t tell(hdfsFile f)
+  {
+    tOffset filePos = ::hdfsTell(mFileSystem, f);
+    if (filePos == -1) {
+      throw std::runtime_error("hdfsTell failed");
+    }    
+    return (uint64_t) filePos;
+  }
+  void seek(hdfsFile f, uint64_t pos)
+  {
+    int ret = ::hdfsSeek(mFileSystem, f, pos);
+    if (ret == -1) {
+      throw std::runtime_error("hdfsSeek failed");
+    }    
+  }
+  void rename(PathPtr from, PathPtr to, int32_t & ret)
+  {
+    ret = ::hdfsRename(mFileSystem, 
+		       from->getUri()->getPath().c_str(), 
+		       to->getUri()->getPath().c_str());
+  }
+  hdfsFile open_for_read(PathPtr p)
+  {
+    p = transformDefaultUri(p);    
+    hdfsFile f = ::hdfsOpenFile(mFileSystem, 
+				p->getUri()->getPath().c_str(), 
+				O_RDONLY,
+				0, 0, 0);
+    
+    if (f == NULL) {
+      throw std::runtime_error((boost::format("Couldn't open HDFS file %1%") %
+				p->toString()).str());
+    }
+    // std::cout << "::hdfsOpenFile(" <<
+    //   p->getUri()->getPath().c_str() << 
+    //   ", O_RDONLY, 0, 0, 0)" << std::endl;
+
+    return f;
+  }
+  hdfsFile open_for_write(PathPtr p,
+			 int32_t bufferSize,
+			 int32_t replicationFactor,
+			 int32_t blockSize)
+  {
+    p = transformDefaultUri(p);
+    hdfsFile f = ::hdfsOpenFile(mFileSystem, 
+				p->getUri()->getPath().c_str(),
+				O_WRONLY|O_CREAT,
+				bufferSize,
+				replicationFactor,
+				blockSize);
+    if (f == NULL) {
+      throw std::runtime_error("Couldn't create HDFS file");
+    }
+
+    // std::cout << "::hdfsOpenFile(" <<
+    //   p->getUri()->getPath().c_str() << 
+    //   ", O_WRONLY|O_CREAT, " << 
+    //   bufferSize << ", " <<
+    //   replicationFactor << ", " <<
+    //   blockSize << ")" << std::endl;
+
+    return f;
   }
 };
 
-class HdfsFileSystemImpl
+// TODO: Improve cache using a weak_ptr
+boost::mutex HdfsFileSystemImpl::fsCacheGuard;
+std::map<std::string, HdfsFileSystemImplPtr > HdfsFileSystemImpl::fsCache;
+HdfsFileSystemImplPtr HdfsFileSystemImpl::get(UriPtr path)
 {
-private:
-  PathPtr mUri;
-  hdfsFS mFileSystem;
+  HdfsFileSystemImplPtr fs;
+  // Note that if we were connecting to many different
+  // hosts it might not be acceptable to hold the lock
+  // during the connect call, but in this case it is 
+  // probably better to be pessimistic and block other
+  // threads since they are likely connecting to the
+  // same HDFS instance.
+  boost::unique_lock<boost::mutex> lk(fsCacheGuard);
   
-  boost::shared_ptr<FileStatus> createFileStatus(hdfsFileInfo& fi);
-  PathPtr transformDefaultUri(PathPtr p);
-public:
-  HdfsFileSystemImpl(UriPtr uri);
-  ~HdfsFileSystemImpl();
-
-  PathPtr getRoot();
-
-  boost::shared_ptr<FileStatus> getStatus(PathPtr p);
-  bool exists(PathPtr p);
-  bool removeAll(PathPtr p);
-
-  void list(PathPtr p,
-	    std::vector<boost::shared_ptr<FileStatus> >& result);
-  void readFile(UriPtr uri, std::string& out);
-};
+  std::map<std::string, HdfsFileSystemImplPtr >::iterator it = fsCache.find(path->getHost());
+  if (it == fsCache.end()) {
+    // std::cout << "Opening HDFS file system at: " << 
+    //   (*path) << std::endl;
+    fs = HdfsFileSystemImplPtr(new HdfsFileSystemImpl(path));
+    fsCache[path->getHost()] = fs;
+  } else {
+    fs = it->second;
+  }
+  return fs;
+}
 
 PathPtr HdfsFileSystemImpl::transformDefaultUri(PathPtr p)
 {
@@ -129,13 +218,12 @@ HdfsFileSystemImpl::HdfsFileSystemImpl(UriPtr uri)
   :
   mFileSystem(NULL)
 {
-  mFileSystem = hdfsConnect(uri->getHost().c_str(), uri->getPort());
+  mFileSystem = ::hdfsConnect(uri->getHost().c_str(), uri->getPort());
   if (mFileSystem == NULL) {
     throw std::runtime_error((boost::format("Failed to connect hdfs://%1%:%2%") %
 			      uri->getHost() %
 			      uri->getPort()).str());
   }
-  mUri = transformDefaultUri(Path::get(uri));
 }
 
 HdfsFileSystemImpl::~HdfsFileSystemImpl()
@@ -152,11 +240,6 @@ boost::shared_ptr<FileStatus> HdfsFileSystemImpl::createFileStatus(hdfsFileInfo&
 					fi.mKind == kObjectKindFile,
 					fi.mKind == kObjectKindDirectory,
 					(std::size_t) fi.mSize);
-}
-
-PathPtr HdfsFileSystemImpl::getRoot()
-{
-  return mUri;
 }
 
 boost::shared_ptr<FileStatus> HdfsFileSystemImpl::getStatus(PathPtr p)
@@ -190,6 +273,13 @@ bool HdfsFileSystemImpl::removeAll(PathPtr p)
 {
   p = transformDefaultUri(p);
   int ret = ::hdfsDelete(mFileSystem, p->toString().c_str(), 1);	    
+  return ret==0;
+}
+
+bool HdfsFileSystemImpl::remove(PathPtr p)
+{
+  p = transformDefaultUri(p);
+  int ret = ::hdfsDelete(mFileSystem, p->toString().c_str(), 0);	    
   return ret==0;
 }
 
@@ -231,12 +321,6 @@ void HdfsFileSystemImpl::readFile(UriPtr uri, std::string& out)
   }
 }
 
-HdfsFileSystem::HdfsFileSystem(const std::string& uri)
-  :
-  mImpl(new HdfsFileSystemImpl(boost::make_shared<URI>(uri.c_str())))
-{
-}
-
 class HdfsFileSystemRegistrar
 {
 public:
@@ -258,15 +342,22 @@ FileSystem * HdfsFileSystemRegistrar::create(UriPtr uri)
 // Static to register file system
 static HdfsFileSystemRegistrar registrar;
 
+HdfsFileSystem::HdfsFileSystem(const std::string& uri)
+  :
+  mImpl(HdfsFileSystemImpl::get(URI::get(uri.c_str())))
+{
+  mUri = mImpl->transformDefaultUri(Path::get(uri));
+}
+
 HdfsFileSystem::HdfsFileSystem(UriPtr uri)
   :
-  mImpl(new HdfsFileSystemImpl(uri))
+  mImpl(HdfsFileSystemImpl::get(uri))
 {
+  mUri = mImpl->transformDefaultUri(Path::get(uri));
 }
 
 HdfsFileSystem::~HdfsFileSystem()
 {
-  delete mImpl;
 }
   
 void HdfsFileSystem::expand(std::string pattern,
@@ -278,7 +369,7 @@ void HdfsFileSystem::expand(std::string pattern,
 
 PathPtr HdfsFileSystem::getRoot()
 {
-  return mImpl->getRoot();
+  return mUri;
 }
 
 boost::shared_ptr<FileStatus> HdfsFileSystem::getStatus(PathPtr p)
@@ -326,13 +417,43 @@ HdfsDelete::~HdfsDelete()
   }
 }
 
-static bool canBeSplit(hdfsFileInfo& file)
+static bool canBeSplit(boost::shared_ptr<FileStatus> file)
 {
   // Gzip compressed files cannot be split.  Others can.
-  int len = strlen(file.mName);
-  return  len < 3 || !boost::algorithm::iequals(".gz", &file.mName[len-3]);
+  return  !boost::algorithm::ends_with(file->getPath()->toString(), 
+				       ".gz");
 }
 
+class hdfs_file_handle
+{
+public:
+  HdfsFileSystemImplPtr FileSystem;
+  hdfsFile File;
+  uint64_t End;
+  hdfs_file_handle()
+    :
+    File(NULL),
+    End(std::numeric_limits<uint64_t>::max())
+  {
+  }
+
+  static int32_t write(HdfsFileSystemImplPtr fs, hdfsFile f, const void * buf, int32_t sz)
+  {
+    fs->write(f, buf, sz);
+  }
+  static void flush(HdfsFileSystemImplPtr fs, hdfsFile f)
+  {
+    fs->flush(f);
+  }
+  static void close(HdfsFileSystemImplPtr fs, hdfsFile f)
+  {
+    fs->close(f);
+  }
+  static void close(HdfsFileSystemImplPtr fs, hdfsFile f, int& ret)
+  {
+    fs->close(f, ret);
+  }
+};
 
 class PartitionCapacity {
 public:
@@ -360,32 +481,27 @@ void hdfs_file_traits::expand(std::string pattern,
 {
   files.resize(numPartitions);
   // TODO: Handle globbing 
-  URI path(pattern.c_str());
-  hdfsFS fs = hdfsConnect(path.getHost().c_str(), path.getPort());
-  if (fs == NULL) {
-    throw std::runtime_error((boost::format("Failed to connect hdfs://%1%:%2%") %
-			      path.getHost() %
-			      path.getPort()).str());
-  }
-  int numEntries = 1;
-  hdfsFileInfo * fileInfo = hdfsGetPathInfo(fs, path.getPath().c_str());
-  if (fileInfo == NULL) {
-    throw std::runtime_error((boost::format("File %1% does not exist") %
-			      path.getPath()).str());
-  }
-  if (fileInfo->mKind == kObjectKindDirectory) {
-    hdfsFileInfo * tmp = hdfsListDirectory(fs, path.getPath().c_str(), &numEntries);
-    hdfsFreeFileInfo(fileInfo, 1);
-    fileInfo = tmp;
+  PathPtr path = Path::get(pattern.c_str());
+  HdfsFileSystemImplPtr fs = HdfsFileSystemImpl::get(path->getUri());
+
+  std::vector<boost::shared_ptr<FileStatus> > fileInfo;
+  boost::shared_ptr<FileStatus> tmp = fs->getStatus(path);
+  if (tmp->isDirectory()) {
+    fs->list(path, fileInfo);
+  } else {
+    fileInfo.push_back(tmp);
   }
 
   // TODO: Should we sort the files on size????
   // Get size of all files.
+  // TODO: Fix FileStatus to contain block size or else
+  // make an HDFS specific method here...
   std::vector<uint64_t> cumulativeSizes;
-  uint64_t totalBlocks=0;
-  for(int i=0; i<numEntries; i++) {
-    cumulativeSizes.push_back(fileInfo[i].mSize + (i==0 ? 0 : cumulativeSizes.back()));
-    totalBlocks += (fileInfo[i].mSize + fileInfo[i].mBlockSize - 1)/fileInfo[i].mBlockSize;
+  uint64_t totalBlocks=0;  
+  std::size_t blockSize = 64*1024*1024;
+  for(std::size_t i=0; i<fileInfo.size(); i++) {
+    cumulativeSizes.push_back(fileInfo[i]->size() + (i==0 ? 0 : cumulativeSizes.back()));
+    totalBlocks += (fileInfo[i]->size() + blockSize - 1)/blockSize;
   }
   uint64_t totalFileSize=cumulativeSizes.back();
 
@@ -409,10 +525,10 @@ void hdfs_file_traits::expand(std::string pattern,
   //   char *** hosts = hdfsGetHosts(fs, 
   // 				  fileInfo[i].mName, 
   // 				  0, 
-  // 				  fileInfo[i].mSize);
+  // 				  fileInfo[i]->size());
   //   int blockIdx=0;
   //   tOffset offset=0;
-  //   for(; offset<fileInfo[i].mSize; offset += fileInfo[i].mBlockSize, blockIdx++) {
+  //   for(; offset<fileInfo[i]->size(); offset += fileInfo[i].mBlockSize, blockIdx++) {
   //     // Mark block as unassigned
   //     blockAssignment[i][offset] = false;
 
@@ -454,10 +570,10 @@ void hdfs_file_traits::expand(std::string pattern,
   //   char *** hosts = hdfsGetHosts(fs, 
   // 				  fileInfo[i].mName, 
   // 				  0, 
-  // 				  fileInfo[i].mSize);
+  // 				  fileInfo[i]->size());
   //   int blockIdx=0;
   //   tOffset offset=0;
-  //   for(; offset<fileInfo[i].mSize; offset += fileInfo[i].mBlockSize, blockIdx++) {
+  //   for(; offset<fileInfo[i]->size(); offset += fileInfo[i].mBlockSize, blockIdx++) {
   //     // Mark block as unassigned
   //     blockAssignment[i][offset] = false;
 
@@ -534,15 +650,17 @@ void hdfs_file_traits::expand(std::string pattern,
   uint64_t  currentPartitionRemaining = currentPartition+1 == numPartitions ? 
     std::numeric_limits<uint64_t>::max() :
     partitionSize;
-  for(int currentFile=0; currentFile<numEntries; ++currentFile)  {
+  for(std::size_t currentFile=0; 
+      currentFile<fileInfo.size(); 
+      ++currentFile)  {
     // We don't want to assign a small part of a file to a partition however
     // This is an arbitrary number at this point; don't know if it is sensible.
     // It should probably be determined by the block size and the size of the file
     // itself.
     const uint64_t minimumFileAllocationSize = 1024*1024;
-    uint64_t currentFileRemaining = fileInfo[currentFile].mSize;
+    uint64_t currentFileRemaining = fileInfo[currentFile]->size();
     while(currentFileRemaining) {
-      uint64_t currentFilePosition = fileInfo[currentFile].mSize - currentFileRemaining;
+      uint64_t currentFilePosition = fileInfo[currentFile]->size() - currentFileRemaining;
       uint64_t fileAllocation = 0;
       bool splittable = canBeSplit(fileInfo[currentFile]);
       if (!splittable ||
@@ -560,7 +678,7 @@ void hdfs_file_traits::expand(std::string pattern,
   	fileAllocation = currentPartitionRemaining;
       }
       // Attach allocation to partition
-      boost::shared_ptr<FileChunk> chunk(new FileChunk(fileInfo[currentFile].mName,
+      boost::shared_ptr<FileChunk> chunk(new FileChunk(fileInfo[currentFile]->getPath()->getUri()->toString(),
   						       currentFilePosition,
 						       splittable ?
   						       currentFilePosition+fileAllocation :
@@ -583,92 +701,46 @@ void hdfs_file_traits::expand(std::string pattern,
       currentFileRemaining -= fileAllocation;	
     }
   }
-  hdfsFreeFileInfo(fileInfo, numEntries);
-}
-
-static boost::mutex fsCacheGuard;
-static std::map<std::string, hdfsFS> fsCache;
-
-static hdfsFS connectToHDFS(URI & path)
-{
-  hdfsFS fs = NULL;
-  // Note that if we were connecting to many different
-  // hosts it might not be acceptable to hold the lock
-  // during the connect call, but in this case it is 
-  // probably better to be pessimistic and block other
-  // threads since they are likely connecting to the
-  // same HDFS instance.
-  boost::unique_lock<boost::mutex> lk(fsCacheGuard);
-  
-  std::map<std::string, hdfsFS>::iterator it = fsCache.find(path.getHost());
-  if (it == fsCache.end()) {
-    fs = hdfsConnect(path.getHost().c_str(), path.getPort());
-    if (fs == NULL) {
-      throw std::runtime_error((boost::format("Couldn't open HDFS filesystem. host=%1%; port=%2%") %
-				path.getHost() %
-				path.getPort()).str());
-    }
-    fsCache[path.getHost()] = fs;
-  } else {
-    fs = it->second;
-  }
-  return fs;
 }
 
 hdfs_file_traits::file_type hdfs_file_traits::open_for_read(const char * filename, 
 							    uint64_t beginOffset,
 							    uint64_t endOffset)
 {
-  URI path(filename);
+  PathPtr path = Path::get(filename);
 
   file_type f = new hdfs_file_handle();
+
   // Connect to the file system
-  f->FileSystem = connectToHDFS(path);
+  f->FileSystem = HdfsFileSystemImpl::get(path->getUri());
 
   // Check and save the size of the file.
-  hdfsFileInfo * fi = hdfsGetPathInfo(f->FileSystem, path.getPath().c_str());
-  if (fi == NULL) {
-    throw std::runtime_error((boost::format("File %1% does not exist") %
-			      filename).str());
-    
-  }
-  f->End = (uint64_t) fi->mSize;
-  hdfsFreeFileInfo(fi, 1);
-    
-  f->File = hdfsOpenFile(f->FileSystem, 
-			 path.getPath().c_str(), 
-			 O_RDONLY,
-			 0, 0, 0);
-  
-  if (f->File == NULL) {
-    throw std::runtime_error((boost::format("Couldn't open HDFS file %1%") %
-			      filename).str());
-  }
+  f->End = f->FileSystem->getStatus(path)->size();
 
+  // Open the file
+  f->File = f->FileSystem->open_for_read(path);
+    
   // Seek to appropriate offset.
-  hdfsSeek(f->FileSystem, f->File, beginOffset);
+  f->FileSystem->seek(f->File, beginOffset);
     
   return f;
 } 
 
 void hdfs_file_traits::close(hdfs_file_traits::file_type f)
 {
-  hdfsCloseFile(f->FileSystem, f->File);
+  f->FileSystem->close(f->File);
   // Don't close since we have the caching hack.
   //hdfsDisconnect(f->FileSystem);
 }
 
 int32_t hdfs_file_traits::read(hdfs_file_traits::file_type f, uint8_t * buf, int32_t bufSize)
 {  
-  tSize tmp = hdfsRead(f->FileSystem, f->File, buf, bufSize);
-  if (tmp == -1)
-    throw std::runtime_error("Failed reading from HDFS file");
-  return tmp;
+  return f->FileSystem->read(f->File, buf, bufSize);
 }
 
 bool hdfs_file_traits::isEOF(hdfs_file_traits::file_type f)
 {
-  uint64_t filePos = (uint64_t) hdfsTell(f->FileSystem, f->File);
+  uint64_t filePos = f->FileSystem->tell(f->File);
   if (filePos >= f->End) 
     return true;
   else
@@ -746,8 +818,8 @@ public:
   static void release(HdfsFileCommitter *);
   HdfsFileCommitter();
   ~HdfsFileCommitter();
-  void track (const std::string& from, const std::string& to,
-	      hdfsFS fileSystem);
+  void track (PathPtr from, PathPtr to,
+	      HdfsFileSystemImplPtr fileSystem);
   bool commit();
   const std::string& getError() const 
   {
@@ -763,13 +835,13 @@ public:
 class HdfsFileRename
 {
 private:
-  std::string mFrom;
-  std::string mTo;
-  hdfsFS mFileSystem;
+  PathPtr mFrom;
+  PathPtr mTo;
+  HdfsFileSystemImplPtr mFileSystem;
 public:
-  HdfsFileRename(const std::string& from,
-		 const std::string& to,
-		 hdfsFS fileSystem);
+  HdfsFileRename(PathPtr from,
+		 PathPtr to,
+		 HdfsFileSystemImplPtr fileSystem);
   ~HdfsFileRename();
   bool prepare(std::string& err);
   void commit();
@@ -812,9 +884,9 @@ HdfsFileCommitter::~HdfsFileCommitter()
 {
 }
 
-void HdfsFileCommitter::track (const std::string& from, 
-			       const std::string& to,
-			       hdfsFS fileSystem)
+void HdfsFileCommitter::track (PathPtr from, 
+			       PathPtr to,
+			       HdfsFileSystemImplPtr fileSystem)
 {
   mActions.push_back(boost::shared_ptr<HdfsFileRename>(new HdfsFileRename(from, to, fileSystem)));
 }
@@ -858,18 +930,20 @@ bool HdfsFileCommitter::commit()
 bool HdfsFileRename::renameLessThan (boost::shared_ptr<HdfsFileRename> lhs, 
 				     boost::shared_ptr<HdfsFileRename> rhs)
 {
-  return strcmp(lhs->mTo.c_str(), rhs->mTo.c_str()) < 0;
+  return strcmp(lhs->mTo->toString().c_str(), 
+		rhs->mTo->toString().c_str()) < 0;
 }
 
-HdfsFileRename::HdfsFileRename(const std::string& from,
-			       const std::string& to,
-			       hdfsFS fileSystem)
+HdfsFileRename::HdfsFileRename(PathPtr from,
+			       PathPtr to,
+			       HdfsFileSystemImplPtr fileSystem)
   :
   mFrom(from),
   mTo(to),
   mFileSystem(fileSystem)
 {
-  if (mFrom.size() == 0 || mTo.size() == 0)
+  if (!mFrom || mFrom->toString().size() == 0 || 
+      !mTo || mTo->toString().size() == 0)
     throw std::runtime_error("HdfsFileRename::HdfsFileRename "
 			     "expects non-empty filenames");
 }
@@ -880,36 +954,43 @@ HdfsFileRename::~HdfsFileRename()
 
 bool HdfsFileRename::prepare(std::string& err)
 {
-  if (mFrom.size()) {
-    BOOST_ASSERT(mTo.size() != 0);
-    std::cout << "HdfsFileRename::prepare renaming " << mFrom.c_str() << " to " <<
-      mTo.c_str() << std::endl;
-    int ret = ::hdfsRename(mFileSystem, mFrom.c_str(), mTo.c_str());
+  if (mFrom && mFrom->toString().size()) {
+    BOOST_ASSERT(mTo && mTo->toString().size() != 0);
+    std::cout << "HdfsFileRename::prepare renaming " << 
+      (*mFrom) << " to " <<
+      (*mTo) << std::endl;
+    int32_t ret;
+    mFileSystem->rename(mFrom, mTo, ret);
     if (ret != 0) {
       std::string msg = (boost::format("Failed to rename HDFS file %1% to %2%") %
-			 mFrom % mTo).str();
+			 (*mFrom) % (*mTo)).str();
       std::cout << msg.c_str() << std::endl;
       // Check whether the file already exists.  If so and it is
       // the same size as what we just wrote, then assume idempotence
       // and return success.
-      hdfsFileInfo * fileInfo = ::hdfsGetPathInfo(mFileSystem, 
-						  mTo.c_str());
-      if (fileInfo == NULL) {
-	err = (boost::format("Rename failed and target file %1% does not exist") %
-	       mTo).str();      
-	std::cout << err.c_str() << std::endl;
-	return false;
+      boost::shared_ptr<FileStatus> toStatus, fromStatus;
+      try {
+	toStatus = 
+	  mFileSystem->getStatus(mTo);
+      } catch(std::exception & ex) {
+	  err = (boost::format("Rename failed and target file %1% does "
+			       "not exist") %
+		 (*mTo)).str();      
+	  std::cout << err.c_str() << std::endl;
+	  return false;
       }
-      hdfsFileInfo * fromFileInfo = ::hdfsGetPathInfo(mFileSystem, 
-						      mFrom.c_str());
-      if (fromFileInfo == NULL) {
-	err = (boost::format("Rename failed, target file %1% exists but failed to "
+      try {
+	fromStatus = 
+	  mFileSystem->getStatus(mFrom);
+      } catch(std::exception & ex) {
+	err = (boost::format("Rename failed, target file %1% exists "
+			     "but failed to "
 			     "get status of temporary file %2%") %
-	       mTo % mFrom).str();      
+	       (*mTo) % (*mFrom)).str();      
 	std::cout << err.c_str() << std::endl;
-	::hdfsFreeFileInfo(fileInfo, 1);
 	return false;
       }
+      
       // This is an interesting check but with compression enabled
       // it isn't guaranteed to hold.  In particular, in a reducer
       // to which we have emitted with a non-unique key there is
@@ -918,22 +999,21 @@ bool HdfsFileRename::prepare(std::string& err)
       // If the order winds up being sufficiently different between two
       // files, then the compression ratio may differ and the resulting
       // file sizes won't match.
-      if (fileInfo->mSize != fromFileInfo->mSize) {
-	msg = (boost::format("Rename failed: target file %1% already exists and has "
-			     "size %2%, "
+      if (toStatus->size() != fromStatus->size()) {
+	msg = (boost::format("Rename failed: target file %1% already "
+			     "exists and has size %2%, "
 			     "temporary file %3% has size %4%; "
 			     "ignoring rename failure and continuing") %
-	       mTo % fileInfo->mSize % mFrom % fromFileInfo->mSize).str();      
+	       (*mTo) % toStatus->size() % 
+	       (*mFrom) % fromStatus->size()).str();      
       } else {
 	msg = (boost::format("Both %1% and %2% have the same size; ignoring "
 			     "rename failure and continuing") %
-	       mFrom % mTo).str();
+	       (*mFrom) % (*mTo)).str();
       }
       std::cout << msg.c_str() << std::endl;
-      ::hdfsFreeFileInfo(fileInfo, 1);
-      ::hdfsFreeFileInfo(fromFileInfo, 1);
     } 
-    mFrom = "";      
+    mFrom = PathPtr();      
     return true;
   } else {
     return false;
@@ -942,29 +1022,29 @@ bool HdfsFileRename::prepare(std::string& err)
 
 void HdfsFileRename::commit()
 {
-  if (mFrom.size() == 0 && mTo.size() != 0) {
-    std::cout << "HdfsFileRename::commit " << mTo.c_str() << std::endl;
+  if (!mFrom && mTo) {
+    std::cout << "HdfsFileRename::commit " << (*mTo) << std::endl;
     // Only commit if we prepared.
-    mTo = "";
+    mTo = PathPtr();
   }
 }
 
 void HdfsFileRename::rollback()
 {
-  if (mFrom.size() == 0 && mTo.size() != 0) {
+  if (!mFrom && mTo) {
     // Only rollback if we prepared.
-    std::cout << "Rolling back permanent file: " << mTo.c_str() << std::endl;
-    ::hdfsDelete(mFileSystem, mTo.c_str(), 0);
-    mTo = "";
+    std::cout << "Rolling back permanent file: " << (*mTo) << std::endl;
+    mFileSystem->remove(mTo);
+    mTo = PathPtr();
   }
 }
 
 void HdfsFileRename::dispose()
 {
-  if (mFrom.size() != 0) {
-    std::cout << "Removing temporary file: " << mFrom.c_str() << std::endl;
-    ::hdfsDelete(mFileSystem, mFrom.c_str(), 0);
-    mFrom = "";
+  if (mFrom) {
+    std::cout << "Removing temporary file: " << (*mFrom) << std::endl;
+    mFileSystem->remove(mFrom);
+    mFrom = PathPtr();
   }
 }
 
@@ -992,7 +1072,8 @@ private:
     }
   };
 
-  hdfsFS mFileSystem;
+  PathPtr mRootUri;
+  HdfsFileSystemImplPtr mFileSystem;
   std::map<std::string, OutputFile *> mFile;
   RuntimePrinter mPrinter;
   AsyncWriter<RuntimeHdfsWriteOperator> mWriter;
@@ -1034,7 +1115,6 @@ RuntimeHdfsWriteOperator::RuntimeHdfsWriteOperator(RuntimeOperator::Services& se
   :
   RuntimeOperator(services, opType),
   mState(START),
-  mFileSystem(NULL),
   mPrinter(getHdfsWriteType().mPrint),
   mWriter(*this),
   mWriterThread(NULL),
@@ -1055,7 +1135,7 @@ RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
     if (it->second->File) {
       // Abnormal shutdown
       int ret;
-      hdfs_file_handle::close(mFileSystem, it->second->File, ret);
+      mFileSystem->close(it->second->File, ret);
       it->second->File = NULL;
     }
   }
@@ -1069,7 +1149,7 @@ RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
     // Java class instance.  Explicitly closing will
     // mess up other instances floating around.
     // hdfsDisconnect(mFileSystem);
-    mFileSystem = NULL;
+    mFileSystem = HdfsFileSystemImplPtr();
   }
   delete mRuntimeContext;
 }
@@ -1090,7 +1170,7 @@ void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
   str << filePath << "/" << tmpStr << "_serial_" << 
     std::setw(5) << std::setfill('0') << getPartition() <<
     ".gz";
-  std::string tempFile = str.str();
+  PathPtr tempPath = Path::get(mRootUri, str.str());
   std::stringstream permFile;
   permFile << filePath + "/serial_" << 
     std::setw(5) << std::setfill('0') << getPartition() <<
@@ -1098,16 +1178,13 @@ void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
   if (mCommitter == NULL) {
     mCommitter = HdfsFileCommitter::get();
   }
-  mCommitter->track(tempFile, permFile.str(), mFileSystem);
-  hdfsFile f = hdfsOpenFile(mFileSystem, 
-		       tempFile.c_str(),
-  		       O_WRONLY|O_CREAT,
-  		       getHdfsWriteType().mBufferSize,
-  		       getHdfsWriteType().mReplicationFactor,
-  		       /*getHdfsWriteType().mBlockSize*/2000000000);
-  if (f == NULL) {
-    throw std::runtime_error("Couldn't create HDFS file");
-  }
+  mCommitter->track(tempPath, 
+		    Path::get(mRootUri, permFile.str()), 
+		    mFileSystem);
+  hdfsFile f = mFileSystem->open_for_write(tempPath,
+					   getHdfsWriteType().mBufferSize,
+					   getHdfsWriteType().mReplicationFactor,
+					   /*getHdfsWriteType().mBlockSize*/2000000000);
   OutputFile * of = new OutputFile(f);
   if (hasInlineHeader()) {
     // We write in-file header for every partition
@@ -1118,7 +1195,7 @@ void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
       uint8_t * output;
       std::size_t outputLen;
       of->Compressor.consumeOutput(output, outputLen);
-      hdfs_file_handle::write(mFileSystem, of->File, output, outputLen);
+      mFileSystem->write(of->File, output, outputLen);
     }
   } 
 
@@ -1129,10 +1206,12 @@ void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
 void RuntimeHdfsWriteOperator::start()
 {
   // Connect to the file system
-  mFileSystem = hdfsConnect(getHdfsWriteType().mHdfsHost.c_str(), getHdfsWriteType().mHdfsPort);
-  if (mFileSystem == NULL) {
-    throw std::runtime_error("Couldn't open HDFS filesystem");
-  }
+  // TODO: Convert write operator to use a URI
+  std::string uriStr = (boost::format("hdfs://%1%:%2%/") %
+			getHdfsWriteType().mHdfsHost %
+			getHdfsWriteType().mHdfsPort).str();
+  mRootUri = Path::get(uriStr);
+  mFileSystem = HdfsFileSystemImpl::get(mRootUri->getUri());
 
   // If statically defined path, create and open file here.
   if (0 != getHdfsWriteType().mHdfsFile.size()) {
@@ -1141,24 +1220,23 @@ void RuntimeHdfsWriteOperator::start()
 
   if (hasHeaderFile()) {
     BOOST_ASSERT(getHdfsWriteType().mTransfer == NULL);
-    // Extract path from URI
-    URI uri(getHdfsWriteType().mHeaderFile.c_str());
+    PathPtr headerPath = Path::get(getHdfsWriteType().mHeaderFile);
     std::string tmpHeaderStr = FileSystem::getTempFileName();
-    std::string tmpHeaderFile("/tmp/headers/" + tmpHeaderStr);
-    mCommitter->track(tmpHeaderFile, uri.getPath(), mFileSystem);
-    hdfsFile headerFile = hdfsOpenFile(mFileSystem, 
-				       tmpHeaderFile.c_str(),
-				       O_WRONLY|O_CREAT,
-				       getHdfsWriteType().mBufferSize,
-				       getHdfsWriteType().mReplicationFactor,
-				       getHdfsWriteType().mBlockSize);
+    PathPtr tmpHeaderPath = Path::get(mRootUri, 
+				      "/tmp/headers/" + tmpHeaderStr);
+    mCommitter->track(tmpHeaderPath, headerPath, mFileSystem);
+    hdfsFile headerFile = 
+      mFileSystem->open_for_write(tmpHeaderPath,
+				  getHdfsWriteType().mBufferSize,
+				  getHdfsWriteType().mReplicationFactor,
+				  getHdfsWriteType().mBlockSize);
     if (headerFile == NULL) {
       throw std::runtime_error("Couldn't create header file");
     }
-    hdfs_file_handle::write(mFileSystem, headerFile, 
-			    &getHdfsWriteType().mHeader[0], 
-			    (tSize) getHdfsWriteType().mHeader.size());
-    hdfs_file_handle::close(mFileSystem, headerFile);
+    mFileSystem->write(headerFile, 
+		       &getHdfsWriteType().mHeader[0], 
+		       (tSize) getHdfsWriteType().mHeader.size());
+    mFileSystem->close(headerFile);
   }
   // Start a thread that will write
   // mWriterThread = 
@@ -1190,7 +1268,7 @@ void RuntimeHdfsWriteOperator::renameTempFile()
   // Java class instance.  Explicitly closing will
   // mess up other instances floating around.
   // hdfsDisconnect(mFileSystem);
-  mFileSystem = NULL;
+  mFileSystem = HdfsFileSystemImplPtr();
 }
 
 void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
@@ -1220,7 +1298,7 @@ void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
       uint8_t * output;
       std::size_t outputLen;
       of->Compressor.consumeOutput(output, outputLen);
-      hdfs_file_handle::write(mFileSystem, of->File, output, outputLen);
+      mFileSystem->write(of->File, output, outputLen);
     }
     mPrinter.clear();
   } else {
@@ -1234,15 +1312,15 @@ void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
 	std::size_t outputLen;
 	it->second->Compressor.consumeOutput(output, outputLen);
 	if (outputLen > 0) {
-	  hdfs_file_handle::write(mFileSystem, it->second->File, output, outputLen);
+	  mFileSystem->write(it->second->File, output, outputLen);
 	} else {
 	  break;
 	}
       }    
       // Flush data to disk
-      hdfs_file_handle::flush(mFileSystem, it->second->File);
+      mFileSystem->flush(it->second->File);
       // Clean close of file and file system
-      hdfs_file_handle::close(mFileSystem, it->second->File);
+      mFileSystem->close(it->second->File);
       it->second->File = NULL;
     }
   }
@@ -1293,7 +1371,7 @@ void RuntimeHdfsWriteOperator::shutdown()
 	end = mFile.end(); it != end; ++it) {
     if (it->second->File) {
       int ret;
-      hdfs_file_handle::close(mFileSystem, it->second->File, ret);
+      mFileSystem->close(it->second->File, ret);
       it->second->File = NULL;
     }
   }
@@ -1303,7 +1381,7 @@ void RuntimeHdfsWriteOperator::shutdown()
     // Java class instance.  Explicitly closing will
     // mess up other instances floating around.
     // hdfsDisconnect(mFileSystem);
-    mFileSystem = NULL;
+    mFileSystem = HdfsFileSystemImplPtr();
   }
   if (mError.size() != 0) {
     throw std::runtime_error(mError);
