@@ -269,6 +269,10 @@ private:
   std::vector<RuntimePort*> mInputPorts;
   std::vector<RuntimePort*> mOutputPorts;
   /**
+   * Completion Ports for async service responses
+   */
+  std::vector<RuntimePort*> mCompletionPorts;
+  /**
    * The OperatorType that this RuntimeOperator is created from.
    */
   const RuntimeOperatorType& mOperatorType;
@@ -310,6 +314,14 @@ protected:
     p->request_init();
     mServices.requestRead(p);
   }
+  void requestCompletion(std::size_t port)
+  {
+    BOOST_ASSERT(port < getCompletionPorts().size());
+    // Guarantee that this port is NOT on a request list.
+    RuntimePort * p = mCompletionPorts[port];
+    p->request_init();
+    mServices.requestRead(p);
+  }
   void requestRead(RuntimePort & ports)
   {
     mServices.requestRead(&ports);
@@ -339,6 +351,15 @@ protected:
   {
     mServices.requestWrite(&port);
   }
+  void requestWriteThrough(int32_t port)
+  {
+    BOOST_ASSERT(std::size_t(port) < getOutputPorts().size());
+    mServices.requestWriteThrough(mOutputPorts[port]);
+  }
+  void requestWriteThrough(RuntimePort & port)
+  {
+    mServices.requestWriteThrough(&port);
+  }
   void write(RuntimePort * port, RecordBuffer buf, bool flush)
   {
     mServices.write(port, buf, flush);
@@ -355,6 +376,10 @@ protected:
   std::vector<RuntimePort*>& getOutputPorts()
   {
     return mOutputPorts;
+  }
+  std::vector<RuntimePort*>& getCompletionPorts()
+  {
+    return mCompletionPorts;
   }
   const RuntimeOperatorType & getOperatorType()
   {
@@ -402,6 +427,12 @@ public:
       mOutputPorts.resize(pos+1, NULL);
     mOutputPorts[pos] = outputPort;
   }
+  void setCompletionPort(RuntimePort * completionPort, std::size_t pos)
+  {
+    if (mCompletionPorts.size() <= pos+1)
+      mCompletionPorts.resize(pos+1, NULL);
+    mCompletionPorts[pos] = completionPort;
+  }
   std::size_t getNumInputs() const
   {
     return mInputPorts.size();
@@ -418,6 +449,10 @@ public:
   typedef std::vector<RuntimePort*>::iterator output_port_iterator;
   output_port_iterator output_port_begin() { return mOutputPorts.begin(); }
   output_port_iterator output_port_end() { return mOutputPorts.end(); }
+
+  typedef std::vector<RuntimePort*>::iterator completion_port_iterator;
+  output_port_iterator completion_port_begin() { return mCompletionPorts.begin(); }
+  output_port_iterator completion_port_end() { return mCompletionPorts.end(); }
 
   /** 
    * Perform any initialization before events fire.  Potentially

@@ -108,6 +108,123 @@ public:
   }
 };
 
+class ServiceCompletionFifo {
+private:
+  /**
+   * Lock that protects mQueue.  This lock must be taken before taking any locks
+   * on scheduler queues.
+   */
+  boost::mutex mLock;
+  /**
+   * The actual fifo itself.
+   */
+  RuntimeFifo<RecordBuffer, 14> mQueue;
+  // Total number of records that have entered this fifo (including those that
+  // have left).
+  uint64_t mRecordsRead;
+  // Target is the output of this; used for making
+  // the completion port on operator.
+  class ServiceCompletionPort * mTarget;
+  // We need to be able to talk to the operator scheduler
+  // to tell it about changes to my state.
+  DataflowScheduler & mTargetScheduler;
+public:
+  ServiceCompletionFifo(DataflowScheduler & targetScheduler);
+  ~ServiceCompletionFifo();
+
+  /** 
+   * The target for the fifo.
+   */
+  class ServiceCompletionPort * getTarget()
+  {
+    return mTarget;
+  }
+
+  /**
+   * Service can write to here (this is the "source"
+   * of the fifo; no port necessary since services
+   * are scheduled by DataflowScheduler).
+   */
+  void write(RecordBuffer buf);
+  
+  /**
+   * Implement sync on behalf of the ports.
+   */
+  void sync(ServiceCompletionPort & port);
+
+  /**
+   * Move a chunk of data from the channel queue into the target port 
+   * local cache.   Reach into the scheduler(s) associated with the ports and
+   * notify them about the event.
+   */
+  void writeSomeToPort();
+
+  /**
+   * The number of elements currently in the channel.
+   * Does not account for the number of elements in
+   * read endpoint or write endpoints.  Note that it 
+   * could safely account for the size of the target cache.
+   * In fact that might be convenient when thinking of other
+   * types of channels in which the size of the target cache
+   * might be much larger (here I am thinking of a port
+   * that serves as a proxy for a very large buffer in a different
+   * thread or machine).
+   * If the channel is not buffered then size is either 0 or
+   * "infinity".
+   */
+  uint64_t getSize() 
+  {
+    return mQueue.getSize();
+  }
+};
+
+class ServiceCompletionPort : public RuntimePort
+{
+private:
+  ServiceCompletionFifo & mChannel;
+
+public:
+  ServiceCompletionPort(ServiceCompletionFifo& channel)
+    :
+    mChannel(channel)
+  {
+  }
+
+  ~ServiceCompletionPort()
+  {
+  }
+
+  /**
+   * Provide access to the fifo for writing (used
+   * by the Service to send in completion.
+   */
+  ServiceCompletionFifo& getFifo() 
+  {
+    return mChannel;
+  }
+
+  /**
+   * Transfer between local endpoint and the channel fifo.
+   */
+  void sync() { mChannel.sync(*this); }
+  
+  /**
+   * Return the size of the attached channel.
+   */
+  uint64_t getSize() const 
+  {
+    return mChannel.getSize(); 
+  }
+
+  /**
+   * The local buffer on this port.
+   */
+  RuntimePort::local_buffer_type & getLocalBuffer() 
+  { 
+    return mLocalBuffer; 
+  }
+};
+
 /**
  * A runtime operator process contains a collection of partitions that
  * are executed by one or more threads.  
@@ -132,6 +249,8 @@ private:
   std::vector<InProcessFifo *> mChannels;
   // State for remote execution
   boost::shared_ptr<ProcessRemoting> mRemoteExecution;
+  // Service Completion Channels
+  std::vector<class ServiceCompletionFifo *> mServiceChannels;
 
   /**
    * Create all of the operators in the required partitions.

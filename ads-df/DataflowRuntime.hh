@@ -442,6 +442,7 @@ public:
  * channels are.
  */
 class DataflowScheduler {
+  friend class DataflowSchedulerScopedLock;
   friend class TwoDataflowSchedulerScopedLock;
 private:
 
@@ -707,6 +708,15 @@ public:
   // Pass the request on to be queued and we yield.
   internalRequestWrite(ports);
   }
+  /**
+   * Special purpose API to do writes avoiding the 
+   * local port queue.
+   */
+  void requestWriteThrough(RuntimePort * ports)
+  {
+    // Pass the request on to be queued and we yield.
+    internalRequestWrite(ports);
+  }
   void read(RuntimePort * port, RecordBuffer& buf)
   {
     port->pop(buf);
@@ -795,6 +805,23 @@ public:
     // and I'd like a better way of handling it.
     if (prevState == RUNNING)
       mState = RUNNING;
+  }
+};
+
+class DataflowSchedulerScopedLock
+{
+private:
+  DataflowScheduler & mOne;
+public:
+  DataflowSchedulerScopedLock(DataflowScheduler & one)
+    :
+    mOne(one)
+  {
+    mOne.mLock.lock();
+  }
+  ~DataflowSchedulerScopedLock()
+  {
+    mOne.mLock.unlock();
   }
 };
 

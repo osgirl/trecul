@@ -78,18 +78,24 @@ DataflowScheduler::~DataflowScheduler()
 
 void DataflowScheduler::setOperator(RuntimeOperator * op)
 {
-      for(RuntimeOperator::input_port_iterator portIt=op->input_port_begin();
-	  portIt != op->input_port_end();
-	  ++portIt) {
-	mDisabled.push_back(**portIt);
-	(*portIt)->setDisabled();
-      }
-      for(RuntimeOperator::output_port_iterator portIt=op->output_port_begin();
-	  portIt != op->output_port_end();
-	  ++portIt) {
-	mDisabled.push_back(**portIt);
-	(*portIt)->setDisabled();
-      }
+  for(RuntimeOperator::input_port_iterator portIt=op->input_port_begin();
+      portIt != op->input_port_end();
+      ++portIt) {
+    mDisabled.push_back(**portIt);
+    (*portIt)->setDisabled();
+  }
+  for(RuntimeOperator::output_port_iterator portIt=op->output_port_begin();
+      portIt != op->output_port_end();
+      ++portIt) {
+    mDisabled.push_back(**portIt);
+    (*portIt)->setDisabled();
+  }
+  for(RuntimeOperator::completion_port_iterator portIt=op->completion_port_begin();
+      portIt != op->completion_port_end();
+      ++portIt) {
+    mDisabled.push_back(**portIt);
+    (*portIt)->setDisabled();
+  }
 }
 
 void DataflowScheduler::cleanup() 

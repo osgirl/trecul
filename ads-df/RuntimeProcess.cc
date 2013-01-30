@@ -154,6 +154,43 @@ void ProcessRemoting::addTarget(const InterProcessFifoSpec& spec,
   throw std::runtime_error("Standard dataflow process does not support repartitioning/shuffle");
 }
 
+ServiceCompletionFifo::ServiceCompletionFifo(DataflowScheduler & targetScheduler)
+:
+  mRecordsRead(0),
+  mTarget(NULL),
+  mTargetScheduler(targetScheduler)
+{
+  mTarget = new ServiceCompletionPort(*this);
+}
+
+ServiceCompletionFifo::~ServiceCompletionFifo()
+{
+  delete mTarget;
+}
+
+void ServiceCompletionFifo::write(RecordBuffer buf)
+{
+  boost::mutex::scoped_lock channelGuard(mLock);
+  DataflowSchedulerScopedLock schedGuard(mTargetScheduler);
+  mQueue.Push(buf);
+  mTargetScheduler.reprioritizeReadRequest(*mTarget);   
+}
+
+void ServiceCompletionFifo::sync(ServiceCompletionPort & port)
+{
+  writeSomeToPort();
+}
+
+void ServiceCompletionFifo::writeSomeToPort()
+{
+  // Move data into the target port.
+  // Signal target that read request is complete.
+  boost::mutex::scoped_lock channelGuard(mLock);
+  DataflowSchedulerScopedLock schedGuard(mTargetScheduler);
+  mQueue.popAndPushSomeTo(mTarget->getLocalBuffer());
+  mTargetScheduler.readComplete(*mTarget);
+}
+
 RuntimeProcess::RuntimeProcess(int32_t partitionStart, 
 			       int32_t partitionEnd,
 			       int32_t numPartitions,
@@ -231,6 +268,11 @@ RuntimeProcess::~RuntimeProcess()
   }  
   for(std::vector<InProcessFifo *>::iterator chit = mChannels.begin();
       chit != mChannels.end();
+      ++chit) {
+    delete *chit;
+  }
+  for(std::vector<ServiceCompletionFifo *>::iterator chit = mServiceChannels.begin();
+      chit != mServiceChannels.end();
       ++chit) {
     delete *chit;
   }
@@ -317,6 +359,12 @@ RuntimeOperator * RuntimeProcess::createOperator(const RuntimeOperatorType * ty,
   mAllOperators.push_back(op);
   mPartitionIndex[partition].push_back(op);
   mTypePartitionIndex[ty][partition] = op;
+  for(int32_t i=0; i<ty->numServiceCompletionPorts(); ++i) {
+    ServiceCompletionFifo * serviceChannel = new ServiceCompletionFifo(*sit->second);
+    op->setCompletionPort(serviceChannel->getTarget(), i);
+    serviceChannel->getTarget()->setOperator(*op);
+    mServiceChannels.push_back(serviceChannel);
+  }
   return op;
 }
 

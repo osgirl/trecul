@@ -137,6 +137,7 @@ public:
   virtual class RuntimeOperator * create(class DataflowScheduler& s) const =0;
   virtual bool isPartitioner() const { return false; }
   virtual bool isCollector() const { return false; }
+  virtual int32_t numServiceCompletionPorts() const { return 0; }
   const RuntimePartitionConstraint& getPartitionConstraint() const 
   {
     return mConstraint;
