@@ -1,0 +1,15 @@
+/**
+ * Validate that switch applies mod output port count.
+ */
+
+g = generate[output="CAST(RECORDCOUNT AS INTEGER) AS a", numRecords=10];
+route = switch[on="a"];
+g -> route;
+c1 = copy[output="a, '0th port' AS tag"];
+route -> c1;
+w1 = write[file="output1.txt", mode="text"];
+c1 -> w1;
+c2 = copy[output="a, '1st port' AS tag"];
+route -> c2;
+w2 = write[file="output2.txt", mode="text"];
+c2 -> w2;
