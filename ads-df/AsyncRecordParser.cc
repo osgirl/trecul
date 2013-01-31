@@ -394,245 +394,6 @@ ParserState ImportFixedLengthString::import(AsyncDataBlock& source, RecordBuffer
   }
 }
 
-CustomImport::CustomImport(const RecordType * ty)
-:
-  mAkidOffset(ty->getFieldAddress("akid")),
-  mCreDateOffset(ty->getFieldAddress("cre_date")),
-  mCoopIdOffset(ty->getFieldAddress("coop_id")),
-  mState(START),
-  mValue(0),
-  mNeg(false)
-{
-}
-
-CustomImport::CustomImport(const FieldAddress & akidOffset,
-			   const FieldAddress & creDateOffset,
-			   const FieldAddress & coopIdOffset)
-:
-  mAkidOffset(akidOffset),
-  mCreDateOffset(creDateOffset),
-  mCoopIdOffset(coopIdOffset),
-  mState(START),
-  mValue(0),
-  mNeg(false)
-{
-}
-
-ParserState CustomImport::import(AsyncDataBlock& source, RecordBuffer target)
-{
-  switch(mState) {
-  case START:
-    while(/* LOOP 0 */true) { 
-      // Parse over two fields
-      for(mField=0; mField<2; ++mField) {
-	do {
-	  if (source.isEmpty()) {
-	    mState = SKIP_TWO_READ;
-	    return ParserState::exhausted();
-	  case SKIP_TWO_READ:
-	    if (source.isEmpty()) {
-	      return ParserState::error(-1);
-	    }
-	  }
-	  if (importInternalSSE2(source, target, '\t')) {
-	    break;
-	  }
-	} while(true);
-      }
-      // Parse akid then grab terminator
-      do {
-	// Fast path
-	if (source.begin() + 22 <= source.end()) {
-	  mAkidOffset.SetFixedLengthString(target, 
-					   (const char *) source.begin(), 
-					   22);
-	  source.consume(22);
-	  break;
-	}
-
-	// Slow path : not enough buffer to copy in one
-	// shot.  Read the remainder of the buffer and try
-	// again.
-	mRead = 0;
-	while(true) {
-	  if (source.isEmpty()) {
-	    mState = READ_AKID;
-	    return ParserState::exhausted();
-	  case READ_AKID:
-	    if (source.isEmpty()) {
-	      return ParserState::error(-1);
-	    }
-	  }
-	  if (22 - mRead + source.begin() <= source.end()) {	  
-	    // We're done
-	    int32_t toRead = 22 - mRead;
-	    memcpy(mAkidOffset.getCharPtr(target) + mRead,
-		   source.begin(),
-		   toRead);
-	    mAkidOffset.clearNull(target);
-	    source.consume(toRead);
-	    mRead = 0;
-	    break;
-	  } else {
-	    // Partial read
-	    int32_t toRead = (int32_t) (source.end() - source.begin());
-	    memcpy(mAkidOffset.getCharPtr(target) + mRead,
-		   source.begin(),
-		   source.end() - source.begin());
-	    mRead += toRead;
-	    source.consumeAll();
-	  }	       
-	}
-      } while (false);
-      // Get the terminator
-      do {
-	if (source.begin() + 1 <= source.end()) {
-	  if (*source.begin() != '\t') {
-	  
-	    throw std::runtime_error("Expected terminator");
-	    // return ParserState::error(-1);
-	  }
-	  source.consume(1);
-	  break;
-	} else {
-	  mState = READ_AKID_TERM;
-	  return ParserState::exhausted();
-	case READ_AKID_TERM:
-	  if (source.isEmpty()) {
-	    return ParserState::error(-1);
-	  }
-	}
-      } while (true);
-      // Parse cre_date then grab terminator
-      do {
-	// Fast path
-	if (source.begin() + 19 <= source.end()) {
-	  mCreDateOffset.SetFixedLengthString(target, 
-					      (const char *) source.begin(), 
-					      19);
-	  source.consume(19);
-	  break;
-	}
-
-	// Slow path : not enough buffer to copy in one
-	// shot.  Read the remainder of the buffer and try
-	// again.
-	mRead = 0;
-	while(true) {
-	  if (source.isEmpty()) {
-	    mState = READ_CRE_DATE;
-	    return ParserState::exhausted();
-	  case READ_CRE_DATE:
-	    if (source.isEmpty()) {
-	      return ParserState::error(-1);
-	    }
-	  }
-	  if (19 - mRead + source.begin() <= source.end()) {	  
-	    // We're done
-	    int32_t toRead = 19 - mRead;
-	    memcpy(mCreDateOffset.getCharPtr(target) + mRead,
-		   source.begin(),
-		   toRead);
-	    mCreDateOffset.clearNull(target);
-	    source.consume(toRead);
-	    mRead = 0;
-	    break;
-	  } else {
-	    // Partial read
-	    int32_t toRead = (int32_t) (source.end() - source.begin());
-	    memcpy(mCreDateOffset.getCharPtr(target) + mRead,
-		   source.begin(),
-		   source.end() - source.begin());
-	    mRead += toRead;
-	    source.consumeAll();
-	  }	       
-	}
-      } while(false);
-      // Get the terminator
-      do {
-	if (source.begin() + 1 <= source.end()) {
-	  if (*source.begin() != '\t') {
-	  
-	    throw std::runtime_error("Expected terminator");
-	    // return ParserState::error(-1);
-	  }
-	  source.consume(1);
-	  break;
-	} else {
-	  mState = READ_CRE_DATE_TERM;
-	  return ParserState::exhausted();
-	case READ_CRE_DATE_TERM:
-	  if (source.isEmpty()) {
-	    return ParserState::error(-1);
-	  }
-	}
-      } while (true);
-      // Parse over 24 fields
-      for(mField=0; mField<23; ++mField) {
-	do {
-	  if (source.isEmpty()) {
-	    mState = SKIP_24_READ;
-	    return ParserState::exhausted();
-	  case SKIP_24_READ:
-	    if (source.isEmpty()) {
-	      return ParserState::error(-1);
-	    }
-	  }
-	  if (importInternalSSE2(source, target, '\t')) {
-	    break;
-	  }
-	} while(true);
-      }
-      // Parse coop_id then grab terminator
-      do {      
-	if (source.isEmpty()) {
-	  mState = READ_FIRST;
-	  return ParserState::exhausted();
-	case READ_FIRST:
-	  if (source.isEmpty()) {
-	    return ParserState::error(-1);
-	  }
-	}
-	if (*source.begin() == '-') {
-	  mNeg = true;
-	  source.consume(1);
-	} else if (*source.begin() == '+') {
-	  source.consume(1);
-	}
-	while(true) {
-	  if (source.isEmpty()) {
-	    mState = READ_DIGITS;
-	    return ParserState::exhausted();
-	  case READ_DIGITS:
-	    if (source.isEmpty()) {
-	      return ParserState::error(-1);
-	    }
-	  }
-	  if (importInternal(source, target)) {
-	    break;
-	  }
-	}
-      } while(false);
-      // Parse to end of file
-      do {
-	if (source.isEmpty()) {
-	  mState = SKIP_LAST_READ;
-	  return ParserState::exhausted();
-	case SKIP_LAST_READ:
-	  if (source.isEmpty()) {
-	    return ParserState::error(-1);
-	  }
-	}
-	if (importInternalSSE2(source, target, '\n')) {
-	  break;
-	}
-      } while(true);
-      mState = START;
-      return ParserState::success();
-    }
-  }
-}
-
 LogicalAsyncParser::LogicalAsyncParser()
   :
   LogicalOperator(1,1,1,1),
@@ -771,6 +532,38 @@ void LogicalAsyncParser::create(class RuntimePlanBuilder& plan)
   plan.mapOutputPort(this, 0, opType, 0);  
 }
 
+GenericRecordImporter::GenericRecordImporter(std::vector<ImporterSpec*>::const_iterator begin,
+					     std::vector<ImporterSpec*>::const_iterator end)
+  :
+  mImporterObjects(NULL)
+{
+  // Convert the import specs into objects and delegates
+  // for fast invocation (that avoids virtual functions/vtable
+  // lookup).
+    
+  // We want all importer state to be packed into a small
+  // region of memory.
+  std::size_t sz = 0;
+  for(std::vector<ImporterSpec*>::const_iterator it = begin;
+      it != end; ++it) {
+    sz += sz % (*it)->objectAlignment();
+    sz += (*it)->objectSize();      
+  }
+  mImporterObjects = new uint8_t [sz];
+  sz = 0;
+  for(std::vector<ImporterSpec*>::const_iterator it = begin;
+      it != end; ++it) {
+    sz += sz % (*it)->objectAlignment();
+    mImporters.push_back((*it)->makeObject(mImporterObjects + sz));
+    sz += (*it)->objectSize();      
+  }
+}
+
+GenericRecordImporter::~GenericRecordImporter()
+{
+  delete [] mImporterObjects;
+}
+
 class GenericAsyncParserOperator : public RuntimeOperator
 {
 private:
@@ -779,12 +572,16 @@ private:
   enum State { START, READ, READ_NEW_RECORD, WRITE, WRITE_EOF };
   State mState;
 
-  // The importer objects themselves
-  uint8_t * mImporterObjects;
-  // Importer delegates
-  std::vector<ImporterDelegate> mImporters;
-  // The field am I currently importing
-  std::vector<ImporterDelegate>::iterator mIt;
+  // // The importer objects themselves
+  // uint8_t * mImporterObjects;
+  // // Importer delegates
+  // std::vector<ImporterDelegate> mImporters;
+  // // The field am I currently importing
+  // std::vector<ImporterDelegate>::iterator mIt;
+  // Importer objects and delegates
+  GenericRecordImporter mImporters;
+  // The field I am currently importing
+  GenericRecordImporter::iterator mIt;
   // Input buffer for the file.
   AsyncDataBlock mInputBuffer;
   // Status of last call to parser
@@ -795,8 +592,6 @@ private:
   RecordBuffer mOutput;
   // Records imported
   uint64_t mRecordsImported;
-  // Perf Test
-  CustomImport mCustomImporter;
 
   const operator_type & getLogParserType()
   {
@@ -808,13 +603,9 @@ public:
 			     const RuntimeOperatorType& opType)
     :
     RuntimeOperator(services, opType),
-    mImporterObjects(NULL),
-    mRecordsImported(0),
-  // Hack perf testing
-    mCustomImporter(((GenericAsyncParserOperatorType*)(&opType))->mAkidOffset,
-		    ((GenericAsyncParserOperatorType*)(&opType))->mCreDateOffset,
-		    ((GenericAsyncParserOperatorType*)(&opType))->mCoopIdOffset)
-    
+    mImporters(getLogParserType().mImporters.begin(),
+	       getLogParserType().mImporters.end()),
+    mRecordsImported(0)
   {
     // std::size_t sz = getLogParserType().mCommentLine.size();
     // if (sz > std::numeric_limits<int32_t>::max()) {
@@ -822,33 +613,33 @@ public:
     // }
     // mCommentLineSz = (int32_t) sz;
 
-    // Convert the import specs into objects and delegates
-    // for fast invocation (that avoids virtual functions/vtable
-    // lookup).
+    // // Convert the import specs into objects and delegates
+    // // for fast invocation (that avoids virtual functions/vtable
+    // // lookup).
     
-    // We want all importer state to be packed into a small
-    // region of memory.
-    std::size_t sz = 0;
-    for(operator_type::field_importer_const_iterator it = 
-	  getLogParserType().mImporters.begin();
-	it != getLogParserType().mImporters.end(); ++it) {
-      sz += sz % (*it)->objectAlignment();
-      sz += (*it)->objectSize();      
-    }
-    mImporterObjects = new uint8_t [sz];
-    sz = 0;
-    for(operator_type::field_importer_const_iterator it = 
-	  getLogParserType().mImporters.begin();
-	it != getLogParserType().mImporters.end(); ++it) {
-      sz += sz % (*it)->objectAlignment();
-      mImporters.push_back((*it)->makeObject(mImporterObjects + sz));
-      sz += (*it)->objectSize();      
-    }
+    // // We want all importer state to be packed into a small
+    // // region of memory.
+    // std::size_t sz = 0;
+    // for(operator_type::field_importer_const_iterator it = 
+    // 	  getLogParserType().mImporters.begin();
+    // 	it != getLogParserType().mImporters.end(); ++it) {
+    //   sz += sz % (*it)->objectAlignment();
+    //   sz += (*it)->objectSize();      
+    // }
+    // mImporterObjects = new uint8_t [sz];
+    // sz = 0;
+    // for(operator_type::field_importer_const_iterator it = 
+    // 	  getLogParserType().mImporters.begin();
+    // 	it != getLogParserType().mImporters.end(); ++it) {
+    //   sz += sz % (*it)->objectAlignment();
+    //   mImporters.push_back((*it)->makeObject(mImporterObjects + sz));
+    //   sz += (*it)->objectSize();      
+    // }
   }
 
   ~GenericAsyncParserOperator()
   {
-    delete [] mImporterObjects;
+    // delete [] mImporterObjects;
   }
 
   /**
@@ -934,86 +725,48 @@ public:
 	}
 	// This is our actual record.
 	mOutput = getLogParserType().mMalloc.malloc();
-	while(true) {
-	  mParserState = mCustomImporter.import(mInputBuffer, mOutput);
-	  if (mParserState.isSuccess()) {
-	    // Successful parse
-	    break;
-	  } else if (mParserState.isExhausted()) {
-	    BOOST_ASSERT(mInputBuffer.isEmpty());
-	    do {
-	      requestRead(0);
-	      mState = READ;
-	      return;
-	    case READ:
-	      {
-		if (mInput != RecordBuffer()) {
-		  getLogParserType().mFree.free(mInput);
+	for(mIt = mImporters.begin();
+	    mIt != mImporters.end();
+	    ++mIt) {
+	  while(true) {
+	    mParserState = (*mIt)(mInputBuffer, mOutput);
+	    if (mParserState.isSuccess()) {
+	      // Successful parse
+	      break;
+	    } else if (mParserState.isExhausted()) {
+	      BOOST_ASSERT(mInputBuffer.isEmpty());
+	      do {
+		requestRead(0);
+		mState = READ;
+		return;
+	      case READ:
+		{
+		  if (mInput != RecordBuffer()) {
+		    getLogParserType().mFree.free(mInput);
+		  }
+		  read(port, mInput);
+		  if (mInput == RecordBuffer()) {
+		    throw std::runtime_error("Parse Error in record: "
+					     "end of file reached");
+		  }
+		  int32_t bytesRead = getLogParserType().mStreamBlock.getSize(mInput);
+		  if (0 == bytesRead) {
+		    // ASSERT here instead of trying again?
+		    getLogParserType().mFree.free(mInput);
+		    mInput = RecordBuffer();
+		    continue;
+		  }
+		  uint8_t * imp = 
+		    (uint8_t *) getLogParserType().mStreamBlock.begin(mInput);
+		  mInputBuffer.rebind(imp, imp + bytesRead);
 		}
-		read(port, mInput);
-		if (mInput == RecordBuffer()) {
-		  throw std::runtime_error("Parse Error in record: "
-					   "end of file reached");
-		}
-		int32_t bytesRead = getLogParserType().mStreamBlock.getSize(mInput);
-		if (0 == bytesRead) {
-		  // ASSERT here instead of trying again?
-		  getLogParserType().mFree.free(mInput);
-		  mInput = RecordBuffer();
-		  continue;
-		}
-		uint8_t * imp = 
-		  (uint8_t *) getLogParserType().mStreamBlock.begin(mInput);
-		mInputBuffer.rebind(imp, imp + bytesRead);
-	      }
-	    } while(false);	      
-	  } else {
-	    // Bad record
-	    throw std::runtime_error("Parse Error in record");
+	      } while(false);	      
+	    } else {
+	      // Bad record
+	      throw std::runtime_error("Parse Error in record");
+	    }
 	  }
 	}
-	// for(mIt = mImporters.begin();
-	//     mIt != mImporters.end();
-	//     ++mIt) {
-	//   while(true) {
-	//     mParserState = (*mIt)(mInputBuffer, mOutput);
-	//     if (mParserState.isSuccess()) {
-	//       // Successful parse
-	//       break;
-	//     } else if (mParserState.isExhausted()) {
-	//       BOOST_ASSERT(mInputBuffer.isEmpty());
-	//       do {
-	// 	requestRead(0);
-	// 	mState = READ;
-	// 	return;
-	//       case READ:
-	// 	{
-	// 	  if (mInput != RecordBuffer()) {
-	// 	    getLogParserType().mFree.free(mInput);
-	// 	  }
-	// 	  read(port, mInput);
-	// 	  if (mInput == RecordBuffer()) {
-	// 	    throw std::runtime_error("Parse Error in record: "
-	// 				     "end of file reached");
-	// 	  }
-	// 	  int32_t bytesRead = getLogParserType().mStreamBlock.getSize(mInput);
-	// 	  if (0 == bytesRead) {
-	// 	    // ASSERT here instead of trying again?
-	// 	    getLogParserType().mFree.free(mInput);
-	// 	    mInput = RecordBuffer();
-	// 	    continue;
-	// 	  }
-	// 	  uint8_t * imp = 
-	// 	    (uint8_t *) getLogParserType().mStreamBlock.begin(mInput);
-	// 	  mInputBuffer.rebind(imp, imp + bytesRead);
-	// 	}
-	//       } while(false);	      
-	//     } else {
-	//       // Bad record
-	//       throw std::runtime_error("Parse Error in record");
-	//     }
-	//   }
-	// }
 	// Done cause we had good record
 	mRecordsImported += 1;
 	requestWrite(0);
