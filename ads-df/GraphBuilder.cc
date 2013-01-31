@@ -48,6 +48,8 @@
 #include "Merger.hh"
 #include "QueueImport.hh"
 #include "ConstantScan.hh"
+#include "AsyncRecordParser.hh"
+#include "GzipOperator.hh"
 #include "HdfsOperator.hh"
 #include "GraphBuilder.hh"
 
@@ -64,6 +66,10 @@
 
 // It appears that one does not need BOOST_CLASS_EXPORT for
 // non polymorphic classes.
+BOOST_CLASS_EXPORT(ImporterSpec);
+BOOST_CLASS_EXPORT(ConsumeTerminatedStringSpec);
+BOOST_CLASS_EXPORT(ImportDecimalInt32Spec);
+BOOST_CLASS_EXPORT(ImportFixedLengthStringSpec);
 BOOST_CLASS_EXPORT(FileCreationPolicy);
 BOOST_CLASS_EXPORT(MultiFileCreationPolicy);
 BOOST_CLASS_EXPORT(WritableFileFactory);
@@ -94,6 +100,9 @@ BOOST_CLASS_EXPORT(RuntimeHdfsWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeUnionAllOperatorType);
 BOOST_CLASS_EXPORT(NativeInputQueueOperatorType);
+BOOST_CLASS_EXPORT(GenericAsyncParserOperatorType);
+BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<ExplicitChunkStrategy>);
+BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<SerialChunkStrategy>);
 BOOST_CLASS_EXPORT(InternalFileParserOperatorType<AsyncDoubleBufferStream<AsyncFileTraits<stdio_file_traits> > >);
 BOOST_CLASS_EXPORT(InternalFileWriteOperatorType);
 BOOST_CLASS_EXPORT(GenericParserOperatorType<ExplicitChunkStrategy>);
@@ -335,6 +344,8 @@ void DataflowGraphBuilder::nodeStart(const char * type,
     mCurrentOp = new LogicalGenerate();
   } else if (boost::algorithm::iequals("group_by", type)) {
     mCurrentOp = new LogicalGroupBy(LogicalGroupBy::HYBRID);
+  } else if (boost::algorithm::iequals("gunzip", type)) {
+    mCurrentOp = new LogicalGunzip();
   } else if (boost::algorithm::iequals("hash_group_by", type)) {
     mCurrentOp = new LogicalGroupBy(LogicalGroupBy::HASH);
   } else if (boost::algorithm::iequals("hash_join", type)) {
@@ -365,8 +376,12 @@ void DataflowGraphBuilder::nodeStart(const char * type,
     mCurrentOp = new SortMergeJoin(SortMergeJoin::RIGHT_SEMI);
   } else if (boost::algorithm::iequals("read", type)) {
     mCurrentOp = new LogicalFileRead();
+  } else if (boost::algorithm::iequals("read_block", type)) {
+    mCurrentOp = new LogicalBlockRead();
   } else if (boost::algorithm::iequals("reduce", type)) {
     mCurrentOp = new LogicalInputQueue();
+  } else if (boost::algorithm::iequals("parse", type)) {
+    mCurrentOp = new LogicalAsyncParser();
   } else if (boost::algorithm::iequals("print", type)) {
     mCurrentOp = new LogicalPrint();
   } else if (boost::algorithm::iequals("sort", type)) {
