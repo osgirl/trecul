@@ -50,6 +50,12 @@ class RuntimeOperator;
 class InProcessFifo;
 class DataflowScheduler;
 
+namespace boost { 
+  namespace asio {
+    class io_service;
+  }
+}
+
 /**
  * A runtime operator process contains a collection of partitions that
  * are executed by one or more threads.
@@ -553,6 +559,49 @@ private:
    */
   uint64_t mMaxWritesBeforeYield;
 
+  /**
+   * Asynchronous IO Service object 
+   *
+   * The basic idea is that when a thread finds that
+   * all operator requests are blocked we require an 
+   * event from an external source (think of a socket
+   * read completing or a disk write completing).  The
+   * IO service object is the mechanism through which 
+   * those external events make their way into the dataflow.
+   *
+   * The current implementation using Boost ASIO has some
+   * potential issues that concern me.  The ASIO infrastructure
+   * is such that the IO service object encapsulates a queue and
+   * all IO completion handlers get posted to the queue and not
+   * executed on the service thread.  It is then 
+   * necessary for the worker thread(s) to call io_service::run 
+   * to dequeue completion handler and execute.  This a very reasonable
+   * design goal that allows a developer to assume that completion
+   * handlers don't have to be thread safe and such.  The trick is
+   * is that the dataflow framework is also trying to provide similar
+   * functionality!  All we want a completion handler to do is to 
+   * to post to our own dataflow scheduler queues!  The concern is twofold
+   *  1) There is a double queueing thing going down: one queuing of the
+   *  completion handler and one queuing to the dataflow scheduler completion
+   *  queue.
+   *  2) While a completion handler is enqueued in the io_service the dataflow
+   *  scheduler doesn't see the completion event.  I am a bit concerned that
+   *  this will cause problems (e.g. mess up the priority handling of the
+   *  dataflow scheduler since we don't process an IO completion quickly 
+   *  enough).
+   * At this point I haven't though carefully enough about the relative 
+   * priority of IO completion ports and dataflow read/write ports to
+   * have intuition about how this concern in 2) will all pan out.
+   *
+   * My current thinking of "ideal" is to modify Boost ASIO in some way
+   * so that it posts directly to dataflow fifos rather than a queue owned
+   * by io_service.  I suppose that would be implementing my own io_service???
+   *
+   * TODO: Is it right to have this owned by a scheduler?  It may be
+   * a process wide thing?
+   */
+  boost::asio::io_service * mIOService;
+
   /** 
    * Run an operator for a bit of time.
    */
@@ -806,6 +855,8 @@ public:
     if (prevState == RUNNING)
       mState = RUNNING;
   }
+
+  boost::asio::io_service& getIOService();
 };
 
 class DataflowSchedulerScopedLock

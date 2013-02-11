@@ -50,6 +50,7 @@
 #include "ConstantScan.hh"
 #include "AsyncRecordParser.hh"
 #include "GzipOperator.hh"
+#include "TcpOperator.hh"
 #include "HdfsOperator.hh"
 #include "GraphBuilder.hh"
 
@@ -100,6 +101,8 @@ BOOST_CLASS_EXPORT(RuntimeHdfsWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeUnionAllOperatorType);
 BOOST_CLASS_EXPORT(NativeInputQueueOperatorType);
+BOOST_CLASS_EXPORT(TcpReadOperatorType);
+BOOST_CLASS_EXPORT(TcpWriteOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncParserOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<ExplicitChunkStrategy>);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<SerialChunkStrategy>);
@@ -392,6 +395,10 @@ void DataflowGraphBuilder::nodeStart(const char * type,
     mCurrentOp = new LogicalSortMerge();
   } else if (boost::algorithm::iequals("switch", type)) {
     mCurrentOp = new LogicalSwitch();
+  } else if (boost::algorithm::iequals("tcp_read", type)) {
+    mCurrentOp = new LogicalTcpRead();
+  } else if (boost::algorithm::iequals("tcp_write", type)) {
+    mCurrentOp = new LogicalTcpWrite();
   } else if (boost::algorithm::iequals("union_all", type)) {
     mCurrentOp = new LogicalUnionAll();
   } else if (boost::algorithm::iequals("unpivot", type)) {

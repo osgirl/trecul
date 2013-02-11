@@ -33,6 +33,7 @@
  */
 
 #include <iostream>
+#include <boost/asio/io_service.hpp>
 #include <boost/assert.hpp>
 #include <boost/thread.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -68,12 +69,16 @@ DataflowScheduler::DataflowScheduler(int32_t partition, int32_t numPartitions)
   mPartition(partition),
   mNumPartitions(numPartitions),
   mCurrentPort(NULL),
-  mMaxWritesBeforeYield(14*10)
+  mMaxWritesBeforeYield(14*10),
+  mIOService(NULL)
 {
+  mIOService = new boost::asio::io_service();
 }
 
 DataflowScheduler::~DataflowScheduler()
 {
+  // TODO: How to shutdown properly.
+  delete mIOService;
 }
 
 void DataflowScheduler::setOperator(RuntimeOperator * op)
@@ -353,6 +358,10 @@ void DataflowScheduler::run()
 {
   init();
   while(!runSome()) {
+    // All requests are blocked; must be something to wait for
+    // in IO land.
+    mIOService->run();
+    mIOService->reset();
     // TODO: Should spin for a bit and then wait in an
     // alertable state.
     // if (0 == --spins) {
@@ -478,6 +487,12 @@ void DataflowScheduler::reprioritizeWriteRequest(RuntimePort & port)
     port.setQueueIndex(newPriority);
   }
 }
+
+boost::asio::io_service& DataflowScheduler::getIOService()
+{
+  return *mIOService;
+}
+
 
 InProcessFifo::InProcessFifo(DataflowScheduler & sourceScheduler, 
 			     DataflowScheduler & targetScheduler,

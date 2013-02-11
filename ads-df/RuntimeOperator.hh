@@ -368,6 +368,10 @@ protected:
   {
     mServices.writeAndSync(port, buf);
   }
+  boost::asio::io_service& getIOService()
+  {
+    mServices.getIOService();
+  }
 
   std::vector<RuntimePort*>& getInputPorts()
   {
