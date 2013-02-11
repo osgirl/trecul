@@ -803,11 +803,7 @@ GenericAsyncParserOperatorType::GenericAsyncParserOperatorType(char fieldSeparat
   mStreamMalloc(inputStreamType->getMalloc()),
   mRecordType(recordType),
   mSkipHeader(false),
-  mCommentLine(commentLine),
-  // Hack perf testing
-  mAkidOffset(recordType->getFieldAddress("akid")),
-  mCreDateOffset(recordType->getFieldAddress("cre_date")),
-  mCoopIdOffset(recordType->getFieldAddress("coop_id"))
+  mCommentLine(commentLine)
 {
   mMalloc = mRecordType->getMalloc();
   mFree = inputStreamType->getFree();
