@@ -39,7 +39,7 @@
 
 BOOST_AUTO_TEST_CASE(testRequestLineParser)
 {
-  char * testString = "GET /my/simple/uri HTTP/1.1\r\nWon'tGetHere";
+  const char * testString = "GET /my/simple/uri HTTP/1.1\r\nWon'tGetHere";
   {
     AsyncDataBlock blk((uint8_t *) testString,
 		       (uint8_t *) (testString + strlen(testString)));
