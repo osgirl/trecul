@@ -16,12 +16,6 @@
 #include "RecordParser.hh"
 #include "StreamBufferBlock.hh"
 
-const char * __attribute__ ((noinline)) mymemchr(const char * begin,
-						 const char * end,
-						 int32_t c,
-						 std::size_t * toFind);
-
-
 // Coroutine-ish parser classes
 
 class ParserState

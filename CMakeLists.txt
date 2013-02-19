@@ -161,5 +161,6 @@ enable_testing()
 # CTestTesting.cmake files in subdirectories (sigh)...
 add_test(ads-ql-unit-test ${CMAKE_CURRENT_BINARY_DIR}/ads-ql/test/ads-ql-test)
 add_test(ads-df-unit-test ${CMAKE_CURRENT_BINARY_DIR}/ads-df/test/ads-df-test)
+add_test(ads-df-parser-test ${CMAKE_CURRENT_BINARY_DIR}/ads-df/test/parser-test)
 add_test(ads-df-core-scripts perl ${CMAKE_CURRENT_SOURCE_DIR}/ads-df/test/testDriver.pl ${CMAKE_CURRENT_SOURCE_DIR}/ads-df/test ${CMAKE_CURRENT_BINARY_DIR}/ads-df/ads-df)
 

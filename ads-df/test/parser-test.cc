@@ -39,7 +39,7 @@
 
 BOOST_AUTO_TEST_CASE(testConsumeTerminatedString)
 {
-  char * testString = "abcdefghijklmnopqrstwxyz";
+  const char * testString = "abcdefghijklmnopqrstwxyz";
   {
     AsyncDataBlock blk((uint8_t *) testString,
 		       (uint8_t *) (testString + strlen(testString)));
@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(testImportDecimalInt32)
   members.push_back(RecordMember("a", Int32Type::Get(ctxt, false)));
   RecordType recTy(members);
   RecordBuffer buf = recTy.getMalloc().malloc();
-  char * testString = "1392342\t";
+  const char * testString = "1392342\t";
   recTy.getFieldAddress("a").setInt32(0, buf);
   {
     AsyncDataBlock blk((uint8_t *) testString,
@@ -129,7 +129,7 @@ BOOST_AUTO_TEST_CASE(testImportFixedLengthString)
   members.push_back(RecordMember("a", CharType::Get(ctxt, 14, true)));
   RecordType recTy(members);
   RecordBuffer buf = recTy.getMalloc().malloc();
-  char * testString = "13923429923434\t";
+  const char * testString = "13923429923434\t";
   recTy.getFieldAddress("a").setNull(buf);
   memset(recTy.getFieldAddress("a").getCharPtr(buf), 'x', 14);
   // Fast path test
@@ -197,7 +197,7 @@ BOOST_AUTO_TEST_CASE(testImportDouble)
   members.push_back(RecordMember("a", DoubleType::Get(ctxt, false)));
   RecordType recTy(members);
   RecordBuffer buf = recTy.getMalloc().malloc();
-  char * testString = "1392342.2384452\t";
+  const char * testString = "1392342.2384452\t";
   // Fast path
   {
     recTy.getFieldAddress("a").setDouble(0, buf);
@@ -339,7 +339,7 @@ BOOST_AUTO_TEST_CASE(testCustomImporter)
   std::vector<ImporterSpec*> specs;
   ImporterSpec::createDefaultImport(&recTy, &baseTy, '\t', '\n', specs);
   RecordBuffer buf = recTy.getMalloc().malloc();
-  char * testString = "3007174\t2518829283\tAAA-AP_7AU46SAAA0BMmLg\t2011-08-02 13:59:39\t13\t16191\t68404\t15624\t\\N\t1\t200.00\tCPM\t0.002000\t\\N\t\\N\t\\N\t\\N\t0.000000\t0.00\t0.00\t0.00\t2011-08-02 13:59:39\t\\N\t\\N\t\\N\t\\N\t1\t1159\t232\t17060\tRMKT\t\\N\t\\N\t\\N\n"
+  const char * testString = "3007174\t2518829283\tAAA-AP_7AU46SAAA0BMmLg\t2011-08-02 13:59:39\t13\t16191\t68404\t15624\t\\N\t1\t200.00\tCPM\t0.002000\t\\N\t\\N\t\\N\t\\N\t0.000000\t0.00\t0.00\t0.00\t2011-08-02 13:59:39\t\\N\t\\N\t\\N\t\\N\t1\t1159\t232\t17060\tRMKT\t\\N\t\\N\t\\N\n"
     "4568685\t3985370792\tAAA-AWOj8E-HHgAAYBFMbA\t2012-07-02 08:50:47\t8\t37074\t1209848\t16707\t\\N\t1\t3.44\tDYNA\t0.000034\t\\N\t\\N\t\\N\t\\N\t0.000000\t0.00\t0.00\t0.00\t2012-07-02 08:50:47\t\\N\t\\N\t\\N\t\\N\t1\t304\t266\t887371\tACQ\t\\N\t\\N\t3718402554839679057\n"
     "4590336\t4129420988\tAAA-AWOj8E-HHgAAYBFMbA\t2012-07-05 23:25:06\t23\t44652\t1119241\t16707\t\\N\t1\t29.40\tDYNA\t0.000294\t0.003000\t\\N\t\\N\t\\N\t0.003000\t0.00\t0.00\t0.00\t2012-07-05 23:25:06\t\\N\t\\N\t\\N\t\\N\t1\t1452\t266\t803732\tRMKT\t\\N\t\\N\t7228796745580141893\n"
     "3791703\t3296814760\tAAA-Ad9j_06HBQAAuFT0Dg\t2012-01-22 14:52:15\t14\t35938\t733766\t16707\t\\N\t1\t69.18\tDYNA\t0.000692\t0.002450\t\\N\t\\N\t\\N\t0.000000\t0.00\t0.00\t0.00\t2012-01-22 14:52:15\t\\N\t\\N\t\\N\t\\N\t1\t1385\t266\t507103\tATMG\t\\N\t\\N\t3206783830354137187\n";

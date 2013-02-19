@@ -33,12 +33,15 @@
 #
 
 add_library(ads-df 
+AsyncRecordParser.cc 
 CompileTimeLogicalOperator.cc 
 ConstantScan.cc 
 DataflowRuntime.cc 
+FileService.cc 
 FileSystem.cc 
 FileWriteOperator.cc 
 GraphBuilder.cc 
+GzipOperator.cc 
 HdfsOperator.cc 
 LogicalOperator.cc 
 Merger.cc 
@@ -47,6 +50,7 @@ RecordParser.cc
 RuntimeOperator.cc 
 RuntimePlan.cc 
 RuntimeProcess.cc
+StreamBufferBlock.cc
 TableMetadata.cc
 TableOperator.cc
 )
