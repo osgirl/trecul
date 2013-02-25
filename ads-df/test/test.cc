@@ -99,6 +99,96 @@ public:
   }
 };
 
+BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
+{
+  std::cout << "testImportFromStringDataBlock" << std::endl;
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  const RecordType * recordType = RecordType::get(ctxt, members);
+  std::vector<FieldImporter > importers;
+  FieldImporter::createDefaultImport(recordType,
+				     recordType,
+				     '\t',
+				     0,
+				     importers);
+  {
+    std::string data("82344	String data");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("String data", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344	");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
+{
+  std::cout << "testImportFromStringDataBlockNullable" << std::endl;
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", Int32Type::Get(ctxt, true)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt, true)));
+  const RecordType * recordType = RecordType::get(ctxt, members);
+  std::vector<FieldImporter > importers;
+  FieldImporter::createDefaultImport(recordType,
+				     recordType,
+				     '\t',
+				     0,
+				     importers);
+  {
+    std::string data("82344	String data");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("String data", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    // This is an important subtle test case: a file that ends with
+    // an empty string in a nullable field.
+    std::string data("82344	");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(testInputQueueOperator)
 {
   std::cout << "testInputQueueOperator" << std::endl;

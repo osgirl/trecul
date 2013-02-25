@@ -867,13 +867,12 @@ private:
   bool ImportNullableField(DataBlock & source, RecordBuffer target) const
   {
     // Check for null marker.  Set mark so we can roll back if need be.
+    // Note that we must not treat failure to get a window of 2 chars
+    // to be an error since the underlying buffer may have a valid non-nullable
+    // field value and only be 1 char (e.g. an empty string).
     source.setMark();
     uint8_t * s = source.open(2);
-    if (s == NULL) {
-      source.releaseMark();
-      return false;
-    }
-    if (s[0] == '\\' && s[1] == 'N') {
+    if (s != NULL && s[0] == '\\' && s[1] == 'N') {
       source.consume(2);
       source.releaseMark();
       mTargetOffset.setNull(target);
