@@ -566,6 +566,94 @@ extern "C" int32_t InternalVarcharRLike(Varchar* lhs, Varchar* rhs, InterpreterC
   return ctxt->regex_match(rhs->c_str(), lhs->c_str());
 }
 
+/**
+ * convert a hex char to its nibble value.
+ * return 127 if not valid hex char.
+ */ 
+static char hexNibble(char c)
+{
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  } else {
+    char lower = c | 0x20;
+    if (lower >= 'a' && lower <= 'f') {
+      return lower - 'a' + 10;
+    }
+  }
+  return 127;
+}
+
+extern "C" void InternalVarcharUrlDecode(Varchar* lhs, Varchar* result, InterpreterContext * ctxt) {
+  std::string s;
+  int32_t sz = lhs->size();
+  s.reserve(sz);
+  const char * p = lhs->c_str();
+  const char * e = p + sz;
+  for(; p != e; ++p) {
+    switch(*p) {
+    case '%':
+      {
+	if(++p != e) {
+	  char decode1 = hexNibble(*p);
+	  if(decode1 != 127 && ++p != e) {
+	    char decode2 = hexNibble(*p);
+	    if (decode2 != 127) {
+	      s += (decode1 << 4) | decode2;
+	    }
+	    break;
+	  }
+	}
+	// TODO: Error if we get here.
+	break;
+      }
+    case '+':
+      s += ' ';
+      break;
+    default:
+      s += *p;
+      break;
+    }
+  }
+  copyFromString(s.c_str(), (int32_t) s.size(), result, ctxt);
+}
+
+extern "C" void InternalVarcharUrlEncode(Varchar* lhs, Varchar* result, InterpreterContext * ctxt) {
+  static const char * hexLut = "0123456789ABCDEF";
+  std::string s;
+  int32_t sz = lhs->size();
+  s.reserve(2*sz);
+  const char * p = lhs->c_str();
+  const char * e = p + sz;
+  for(; p != e; ++p) {
+    switch(*p) {
+    case '0': case '1': case '2': case '3': case '4':
+    case '5': case '6': case '7': case '8': case '9':
+    case 'a': case 'b': case 'c': case 'd': case 'e':
+    case 'f': case 'g': case 'h': case 'i': case 'j':
+    case 'k': case 'l': case 'm': case 'n': case 'o':
+    case 'p': case 'q': case 'r': case 's': case 't':
+    case 'u': case 'v': case 'w': case 'x': case 'y': case 'z':
+    case 'A': case 'B': case 'C': case 'D': case 'E':
+    case 'F': case 'G': case 'H': case 'I': case 'J':
+    case 'K': case 'L': case 'M': case 'N': case 'O':
+    case 'P': case 'Q': case 'R': case 'S': case 'T':
+    case 'U': case 'V': case 'W': case 'X': case 'Y': case 'Z':
+    case '.': case '-': case '*': case '_': 
+      s += *p;
+      break;
+    case ' ':
+      s += '+';
+      break;
+    default:
+      s += '%';
+      s += hexLut[*reinterpret_cast<const uint8_t *>(p) >> 4];
+      s += hexLut[*p & 0x0f];
+      break;
+    }
+  }
+  copyFromString(s.c_str(), (int32_t) s.size(), result, ctxt);
+}
+
 extern "C" void InternalCharFromVarchar(Varchar* in, char * out, int32_t outSz) {
   if (in->Large.Large) {
     if (outSz <= in->Large.Size) {
@@ -584,6 +672,30 @@ extern "C" void InternalCharFromVarchar(Varchar* in, char * out, int32_t outSz) 
   }
   // Null terminate.
   out[outSz] = 0;
+}
+
+extern "C" void InternalVarcharReplace(Varchar* lhs, 
+				       Varchar* pattern,
+				       Varchar* format,
+				       Varchar * result,
+				       InterpreterContext * ctxt) {
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  std::string s(ptr, sz);
+  boost::replace_all(s, pattern->c_str(), format->c_str());
+  copyFromString(s.c_str(), (int32_t) s.size(), result, ctxt);
+  // boost::iterator_range<const char*> rng(ptr, ptr+sz);
+  // unsigned patSz;
+  // const char * patPtr;
+  // getVarcharRange(pattern, patPtr, patSz);
+  // boost::iterator_range<const char*> patRng(patPtr, patPtr+patSz);
+  // unsigned fmtSz;
+  // const char * fmtPtr;
+  // getVarcharRange(format, fmtPtr, fmtSz);
+  // boost::iterator_range<const char*> fmtRng(fmtPtr, fmtPtr+fmtSz);
+  // rng = boost::replace_all_copy(rng, patRng, fmtRng);
+  // copyFromString(rng, result, ctxt);
 }
 
 extern "C" void substr(Varchar* lhs, 
@@ -1718,6 +1830,29 @@ void LLVMBase::InitializeLLVM()
 			   numArguments, 
 			   0);
   libFunVal = ::LoadAndValidateExternalFunction(*this, "InternalDoubleFromDatetime", funTy);
+
+  numArguments = 0;
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = mContext->LLVMDecContextPtrType;
+  funTy = LLVMFunctionType(LLVMVoidTypeInContext(mContext->LLVMContext), &argumentTypes[0], numArguments, 0);
+  LoadAndValidateExternalFunction("urldecode", "InternalVarcharUrlDecode", llvm::unwrap(funTy));
+
+  numArguments = 0;
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = mContext->LLVMDecContextPtrType;
+  funTy = LLVMFunctionType(LLVMVoidTypeInContext(mContext->LLVMContext), &argumentTypes[0], numArguments, 0);
+  LoadAndValidateExternalFunction("urlencode", "InternalVarcharUrlEncode", llvm::unwrap(funTy));
+
+  numArguments = 0;
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = mContext->LLVMDecContextPtrType;
+  funTy = LLVMFunctionType(LLVMVoidTypeInContext(mContext->LLVMContext), &argumentTypes[0], numArguments, 0);
+  LoadAndValidateExternalFunction("replace", "InternalVarcharReplace", llvm::unwrap(funTy));
 
   numArguments = 0;
   argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);

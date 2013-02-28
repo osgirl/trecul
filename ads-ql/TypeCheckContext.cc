@@ -453,6 +453,20 @@ void TypeCheckContext::loadBuiltinFunctions()
 			     FunctionType::Get(drc, 
 					       VarcharType::Get(drc), 
 					       Int32Type::Get(drc)));
+  mTypeCheckSymbolTable->add(fnPrefix, "urldecode", 
+			     FunctionType::Get(drc, 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc)));
+  mTypeCheckSymbolTable->add(fnPrefix, "urlencode", 
+			     FunctionType::Get(drc, 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc)));
+  mTypeCheckSymbolTable->add(fnPrefix, "replace", 
+			     FunctionType::Get(drc, 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc)));
   mTypeCheckSymbolTable->add(fnPrefix, "substr", 
 			     FunctionType::Get(drc, 
 					       VarcharType::Get(drc), 

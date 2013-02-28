@@ -3822,6 +3822,104 @@ BOOST_AUTO_TEST_CASE(testIQLFunctionCallString)
   t1.getTarget()->getFree().free(outputBuf);
 }
 
+BOOST_AUTO_TEST_CASE(testIQLFunctionCallUrlDecode)
+{
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("d", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("e", VarcharType::Get(ctxt)));
+  boost::shared_ptr<RecordType> recordType(new RecordType(members));
+  
+  // Simple Transfer of everything
+  RecordTypeTransfer t1(ctxt, "xfer1", recordType.get(), 
+			"a,c"
+			", urldecode(a) as e"
+			", urldecode(b) as f"
+			", urldecode(c) as g"
+			", urldecode(d) as h"
+			", urlencode(e) as i"
+			", urlencode(urlencode(e)) as j"
+			);
+
+  // TODO: Behavior when decoding and there are illegal chars???
+  // Actually execute this thing.
+  std::string longStr ("%20%22This%20is+a%20Long%20St%72ing%20Th*-_at%20Lives%20On%20The%20heap.%22%20%20");
+  std::string longStrDecoded (" \"This is a Long String Th*-_at Lives On The heap.\"  ");
+  std::string longStrEncoded ("+%22This+is+a+Long+String+Th*-_at+Lives+On+The+heap.%22++");
+  std::string longStrDoubleEncoded ("%2B%2522This%2Bis%2Ba%2BLong%2BString%2BTh*-_at%2BLives%2BOn%2BThe%2Bheap.%2522%2B%2B");
+  RecordBuffer inputBuf = recordType->GetMalloc()->malloc();
+  recordType->setVarchar("a", "aaa", inputBuf);
+  recordType->setVarchar("b", "", inputBuf);
+  recordType->setVarchar("c", "c%64e%20fG%48I", inputBuf);
+  recordType->setVarchar("d", longStr.c_str(), inputBuf);
+  recordType->setVarchar("e", longStrDecoded.c_str(), inputBuf);
+  RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+  InterpreterContext runtimeCtxt;
+  t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+  BOOST_CHECK(boost::algorithm::equals("aaa", t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("aaa", t1.getTarget()->getVarcharPtr("e", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("", t1.getTarget()->getVarcharPtr("f", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("cde fGHI", t1.getTarget()->getVarcharPtr("g", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longStrDecoded, t1.getTarget()->getVarcharPtr("h", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longStrEncoded, t1.getTarget()->getVarcharPtr("i", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longStrDoubleEncoded, t1.getTarget()->getVarcharPtr("j", outputBuf)->c_str()));
+  t1.getTarget()->getFree().free(outputBuf);
+  recordType->getFree().free(inputBuf);
+}
+
+BOOST_AUTO_TEST_CASE(testIQLFunctionCallReplace)
+{
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("d", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("e", VarcharType::Get(ctxt)));
+  boost::shared_ptr<RecordType> recordType(new RecordType(members));
+  
+  // Simple Transfer of everything
+  RecordTypeTransfer t1(ctxt, "xfer1", recordType.get(), 
+			"a,c"
+			", replace(a, 'a', 'b') as e"
+			", replace(a, a, 'bbb') as f"
+			", replace(b, 'a', 'b') as g"
+			", replace(a, 'a', '') as h"
+			", replace(a, 'aa', '') as i"
+			", replace(c, 'de', 'aaa') as j"
+			", replace(c, 'de', a) as k"
+			", replace(c, 'de', 'abcedfghijk') as l"
+			", replace(d, '\"', '-') as m"
+			);
+
+  // Actually execute this thing.
+  std::string longStr (" \"This is a Long String That Lives On The heap\"  ");
+  std::string longStrReplace (" -This is a Long String That Lives On The heap-  ");
+  RecordBuffer inputBuf = recordType->GetMalloc()->malloc();
+  recordType->setVarchar("a", "aaa", inputBuf);
+  recordType->setVarchar("b", "", inputBuf);
+  recordType->setVarchar("c", "cde fGHI", inputBuf);
+  recordType->setVarchar("d", longStr.c_str(), inputBuf);
+  RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+  InterpreterContext runtimeCtxt;
+  t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+  BOOST_CHECK(boost::algorithm::equals("aaa", t1.getTarget()->getVarcharPtr("a", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("bbb", t1.getTarget()->getVarcharPtr("e", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("bbb", t1.getTarget()->getVarcharPtr("f", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("", t1.getTarget()->getVarcharPtr("g", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("", t1.getTarget()->getVarcharPtr("h", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("a", t1.getTarget()->getVarcharPtr("i", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("caaa fGHI", t1.getTarget()->getVarcharPtr("j", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("caaa fGHI", t1.getTarget()->getVarcharPtr("k", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals("cabcedfghijk fGHI", t1.getTarget()->getVarcharPtr("l", outputBuf)->c_str()));
+  BOOST_CHECK(boost::algorithm::equals(longStrReplace, t1.getTarget()->getVarcharPtr("m", outputBuf)->c_str()));
+  t1.getTarget()->getFree().free(outputBuf);
+  recordType->getFree().free(inputBuf);
+}
+
 void testDatediff(bool leftNullable, bool rightNullable)
 {
   DynamicRecordContext ctxt;
