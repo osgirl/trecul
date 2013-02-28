@@ -33,6 +33,7 @@
 #
 
 add_library(ads-df 
+http_parser.c
 AsyncRecordParser.cc 
 CompileTimeLogicalOperator.cc 
 ConstantScan.cc 
@@ -43,6 +44,7 @@ FileWriteOperator.cc
 GraphBuilder.cc 
 GzipOperator.cc 
 HdfsOperator.cc 
+HttpOperator.cc 
 LogicalOperator.cc 
 Merger.cc 
 QueueImport.cc 

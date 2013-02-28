@@ -11,10 +11,16 @@ class HttpParserBase
 public:
   HttpParserBase() {}
   ~HttpParserBase() {}
+
+  static char lower(char c) 
+  {
+    return ((uint8_t) c) | 0x20;
+  }
+
   static bool isAlpha(char c) 
   {
     // make lower
-    uint8_t ch = ((uint8_t) c) | 0x20;
+    uint8_t ch = lower(c);
     return c >= 'a' && c <= 'z';
   }
 
@@ -109,8 +115,7 @@ public:
   static bool isHexDigit(const AsyncDataBlock& source)
   {
     char c = *((const char *) source.begin());
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || 
-      (c >= 'A' && c <= 'F');
+    return (c >= '0' && c <= '9') || isAlpha(c);
   }
 
   static bool isToken(const AsyncDataBlock& source)

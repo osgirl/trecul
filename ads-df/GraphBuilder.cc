@@ -51,6 +51,7 @@
 #include "AsyncRecordParser.hh"
 #include "GzipOperator.hh"
 #include "TcpOperator.hh"
+#include "HttpOperator.hh"
 #include "HdfsOperator.hh"
 #include "GraphBuilder.hh"
 
@@ -103,6 +104,7 @@ BOOST_CLASS_EXPORT(RuntimeUnionAllOperatorType);
 BOOST_CLASS_EXPORT(NativeInputQueueOperatorType);
 BOOST_CLASS_EXPORT(TcpReadOperatorType);
 BOOST_CLASS_EXPORT(TcpWriteOperatorType);
+BOOST_CLASS_EXPORT(HttpReadOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncParserOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<ExplicitChunkStrategy>);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<SerialChunkStrategy>);
@@ -363,6 +365,8 @@ void DataflowGraphBuilder::nodeStart(const char * type,
     mCurrentOp = new HashJoin(HashJoin::RIGHT_OUTER);
   } else if (boost::algorithm::iequals("hash_right_semi_join", type)) {
     mCurrentOp = new HashJoin(HashJoin::RIGHT_SEMI);
+  } else if (boost::algorithm::iequals("http_read", type)) {
+    mCurrentOp = new LogicalHttpRead();
   } else if (boost::algorithm::iequals("map", type)) {
     mCurrentOp = new LogicalInputQueue();
   } else if (boost::algorithm::iequals("merge_join", type)) {

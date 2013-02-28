@@ -359,8 +359,11 @@ void DataflowScheduler::run()
   init();
   while(!runSome()) {
     // All requests are blocked; must be something to wait for
-    // in IO land.
-    mIOService->run();
+    // in IO land.  Only block on the first request because it 
+    // may result in us having more work to do while subsequent 
+    // IO's may not be ready yet and we shouldn't need to wait for them.
+    mIOService->run_one();
+    mIOService->poll();
     mIOService->reset();
     // TODO: Should spin for a bit and then wait in an
     // alertable state.
