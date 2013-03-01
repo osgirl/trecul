@@ -39,6 +39,7 @@
 #include <boost/format.hpp>
 #include <boost/algorithm/string/trim.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
+#include <boost/algorithm/string/find.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/gregorian/gregorian.hpp>
 #include <boost/date_time/local_time_adjustor.hpp>
@@ -685,17 +686,24 @@ extern "C" void InternalVarcharReplace(Varchar* lhs,
   std::string s(ptr, sz);
   boost::replace_all(s, pattern->c_str(), format->c_str());
   copyFromString(s.c_str(), (int32_t) s.size(), result, ctxt);
-  // boost::iterator_range<const char*> rng(ptr, ptr+sz);
-  // unsigned patSz;
-  // const char * patPtr;
-  // getVarcharRange(pattern, patPtr, patSz);
-  // boost::iterator_range<const char*> patRng(patPtr, patPtr+patSz);
-  // unsigned fmtSz;
-  // const char * fmtPtr;
-  // getVarcharRange(format, fmtPtr, fmtSz);
-  // boost::iterator_range<const char*> fmtRng(fmtPtr, fmtPtr+fmtSz);
-  // rng = boost::replace_all_copy(rng, patRng, fmtRng);
-  // copyFromString(rng, result, ctxt);
+}
+
+extern "C" int32_t InternalVarcharLocate(Varchar* pattern, 
+					 Varchar* lhs) {
+  unsigned patSz;
+  const char * patPtr;
+  getVarcharRange(pattern, patPtr, patSz);  
+  // MySQL Behavior: empty space always returns 1.
+  if (0 == patSz) return 1;
+  unsigned sz;
+  const char * ptr;
+  getVarcharRange(lhs, ptr, sz);
+  boost::iterator_range<const char*> rng(ptr, ptr+sz);
+  boost::iterator_range<const char*> patRng(patPtr, patPtr+patSz);
+  boost::iterator_range<const char*> result 
+    = boost::find_first(rng, patRng);
+  return result.begin()== rng.end() ? 0 : 
+    (int32_t) (result.begin()-rng.begin() + 1);
 }
 
 extern "C" void substr(Varchar* lhs, 
@@ -1853,6 +1861,12 @@ void LLVMBase::InitializeLLVM()
   argumentTypes[numArguments++] = mContext->LLVMDecContextPtrType;
   funTy = LLVMFunctionType(LLVMVoidTypeInContext(mContext->LLVMContext), &argumentTypes[0], numArguments, 0);
   LoadAndValidateExternalFunction("replace", "InternalVarcharReplace", llvm::unwrap(funTy));
+
+  numArguments = 0;
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);
+  funTy = LLVMFunctionType(LLVMInt32TypeInContext(mContext->LLVMContext), &argumentTypes[0], numArguments, 0);
+  LoadAndValidateExternalFunction("locate", "InternalVarcharLocate", llvm::unwrap(funTy));
 
   numArguments = 0;
   argumentTypes[numArguments++] = LLVMPointerType(mContext->LLVMVarcharType, 0);

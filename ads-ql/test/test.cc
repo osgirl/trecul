@@ -3920,6 +3920,63 @@ BOOST_AUTO_TEST_CASE(testIQLFunctionCallReplace)
   recordType->getFree().free(inputBuf);
 }
 
+BOOST_AUTO_TEST_CASE(testIQLFunctionCallLocate)
+{
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("d", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("e", VarcharType::Get(ctxt, true)));
+  boost::shared_ptr<RecordType> recordType(new RecordType(members));
+  
+  // Simple Transfer of everything
+  RecordTypeTransfer t1(ctxt, "xfer1", recordType.get(), 
+			"a,c"
+			", locate('a', a) as e"
+			", locate(a, a) as f"
+			", locate('a', b) as g"
+			", locate('b', a) as h"
+			", locate(' ', c) as i"
+			", locate('GH', c) as j"
+			", locate('GK', c) as k"
+			", locate('Str',d ) as l"
+			", locate('On', d) as m"
+			", locate('', d) as n"
+			", locate('', b) as o"
+			", locate('  ', d) as p"
+			", locate(e, d) as q"
+			", locate('  ', e) as r"
+			);
+
+  // Actually execute this thing.
+  std::string longStr (" \"This is a Long String That Lives On The heap On the heap\"  ");
+  RecordBuffer inputBuf = recordType->GetMalloc()->malloc();
+  recordType->setVarchar("a", "aaa", inputBuf);
+  recordType->setVarchar("b", "", inputBuf);
+  recordType->setVarchar("c", "cde fGHI", inputBuf);
+  recordType->setVarchar("d", longStr.c_str(), inputBuf);
+  RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+  InterpreterContext runtimeCtxt;
+  t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+  BOOST_CHECK_EQUAL(1, t1.getTarget()->getInt32("e", outputBuf));
+  BOOST_CHECK_EQUAL(1, t1.getTarget()->getInt32("f", outputBuf));
+  BOOST_CHECK_EQUAL(0, t1.getTarget()->getInt32("g", outputBuf));
+  BOOST_CHECK_EQUAL(0, t1.getTarget()->getInt32("h", outputBuf));
+  BOOST_CHECK_EQUAL(4, t1.getTarget()->getInt32("i", outputBuf));
+  BOOST_CHECK_EQUAL(6, t1.getTarget()->getInt32("j", outputBuf));
+  BOOST_CHECK_EQUAL(0, t1.getTarget()->getInt32("k", outputBuf));
+  BOOST_CHECK_EQUAL(18, t1.getTarget()->getInt32("l", outputBuf));
+  BOOST_CHECK_EQUAL(36, t1.getTarget()->getInt32("m", outputBuf));
+  BOOST_CHECK_EQUAL(1, t1.getTarget()->getInt32("n", outputBuf));
+  BOOST_CHECK_EQUAL(1, t1.getTarget()->getInt32("o", outputBuf));
+  BOOST_CHECK_EQUAL((int32_t)(longStr.size()-1), 
+		    t1.getTarget()->getInt32("p", outputBuf));
+  t1.getTarget()->getFree().free(outputBuf);
+  recordType->getFree().free(inputBuf);
+}
+
 void testDatediff(bool leftNullable, bool rightNullable)
 {
   DynamicRecordContext ctxt;

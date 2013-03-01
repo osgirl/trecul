@@ -467,6 +467,11 @@ void TypeCheckContext::loadBuiltinFunctions()
 					       VarcharType::Get(drc), 
 					       VarcharType::Get(drc), 
 					       VarcharType::Get(drc)));
+  mTypeCheckSymbolTable->add(fnPrefix, "locate", 
+			     FunctionType::Get(drc, 
+					       VarcharType::Get(drc), 
+					       VarcharType::Get(drc), 
+					       Int32Type::Get(drc)));
   mTypeCheckSymbolTable->add(fnPrefix, "substr", 
 			     FunctionType::Get(drc, 
 					       VarcharType::Get(drc), 
