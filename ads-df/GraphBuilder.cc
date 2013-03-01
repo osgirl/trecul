@@ -52,6 +52,7 @@
 #include "GzipOperator.hh"
 #include "TcpOperator.hh"
 #include "HttpOperator.hh"
+#include "QueryStringOperator.hh"
 #include "HdfsOperator.hh"
 #include "GraphBuilder.hh"
 
@@ -105,6 +106,7 @@ BOOST_CLASS_EXPORT(NativeInputQueueOperatorType);
 BOOST_CLASS_EXPORT(TcpReadOperatorType);
 BOOST_CLASS_EXPORT(TcpWriteOperatorType);
 BOOST_CLASS_EXPORT(HttpReadOperatorType);
+BOOST_CLASS_EXPORT(QueryStringOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncParserOperatorType);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<ExplicitChunkStrategy>);
 BOOST_CLASS_EXPORT(GenericAsyncReadOperatorType<SerialChunkStrategy>);
@@ -389,6 +391,8 @@ void DataflowGraphBuilder::nodeStart(const char * type,
     mCurrentOp = new LogicalInputQueue();
   } else if (boost::algorithm::iequals("parse", type)) {
     mCurrentOp = new LogicalAsyncParser();
+  } else if (boost::algorithm::iequals("parse_query_string", type)) {
+    mCurrentOp = new LogicalQueryString();
   } else if (boost::algorithm::iequals("print", type)) {
     mCurrentOp = new LogicalPrint();
   } else if (boost::algorithm::iequals("sort", type)) {

@@ -7,6 +7,7 @@
 
 #include "RuntimeProcess.hh"
 #include "HttpOperator.hh"
+#include "QueryStringOperator.hh"
 #include "HttpParser.hh"
 #include "http_parser.h"
 
@@ -82,109 +83,6 @@ void HttpRequestType::appendVarchar(const char * start, const char * end,
     field.getVarcharPtr(buf)->append(start, (int32_t) (end-start));
   }
 }
-
-template <typename _Processor>
-class QueryStringParser
-{
-private:
-  enum State { START, FIELD_START, FIELD, VALUE_START, VALUE };
-  State mState;
-  char mFieldValueSeparator;
-  char mPairSeparator;
-  _Processor * mProcessor;
-public:
-  QueryStringParser(_Processor * processor)
-    :
-    mState(FIELD_START),
-    mFieldValueSeparator('='),
-    mPairSeparator('&'),
-    mProcessor(processor)
-  {
-  }
-
-  std::size_t parse(const char * data, std::size_t sz)
-  {
-    const char * fieldMark = NULL;
-    const char * valueMark = NULL;
-
-    // Handle empty
-    if (0 == sz) {
-      throw std::runtime_error("Not implemented yet");
-    }
-
-    // Initialize Marks
-    switch(mState) {
-    case FIELD:
-      fieldMark = data;
-      break;
-    case VALUE_START:
-      valueMark = data;
-    default:
-      break;
-    }
-
-    // Process data
-    const char * end = data + sz;
-    const char * c = data;
-    for(; c != end; ++c) {
-      switch(mState) {
-      case FIELD_START:
-	if (*c == ' ') {
-	  break;
-	} else if (*c == mPairSeparator) {
-	  // TODO: Error.
-	  break;
-	} else {
-	  if (fieldMark == NULL) {
-	    fieldMark = c;
-	  }
-	  mState = FIELD;	  
-	  break;
-	}
-      case FIELD:
-	if (*c == mFieldValueSeparator) {
-	  mState = VALUE_START;
-	  mProcessor->onQueryStringField(fieldMark, c - fieldMark);
-	  fieldMark = NULL;
-	} 
-	// TODO: Validate other characters?
-	break;
-      case VALUE_START:
-	if (*c == mPairSeparator) {
-	  // Empty value OK but leave it as a NULL
-	  // (or should we call onQueryStringValue with empty?)
-	  // Might be better to call with empty to distinguish
-	  // case the field is present with empty from not present.
-	  mState = FIELD_START;
-	  break;
-	} else {
-	  valueMark = c;
-	  mState = VALUE;
-	  break;
-	}
-	// TODO: Validate other characters?
-      case VALUE:
-	if (*c == mPairSeparator) {
-	  mState = FIELD_START;
-	  mProcessor->onQueryStringValue(valueMark, c - valueMark);
-	  valueMark = NULL;
-	} 
-	// TODO: Validate other characters?
-	break;
-      }  
-    }
-
-    // send any data to callback
-    if (fieldMark != NULL) {
-      mProcessor->onQueryStringField(fieldMark, c - data + 1);
-      fieldMark = NULL;
-    }
-    if (valueMark != NULL) {
-      mProcessor->onQueryStringValue(valueMark, c - data + 1);
-      valueMark = NULL;
-    }
-  }
-};
 
 /**
  * The model here is that the http read operator listens on a port
@@ -342,7 +240,9 @@ HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
   mIOSize(8192),
   mIO(new char [8192]),
   mRequestType(requestType),
-  mQueryStringParser(this)
+  mQueryStringParser(this),
+  mDecodeState(PERCENT_DECODE_START),
+  mDecodeChar(0)
 {
   ::http_parser_init(&mParser, HTTP_REQUEST);
   mParser.data = this;
