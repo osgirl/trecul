@@ -47,6 +47,7 @@ HdfsOperator.cc
 HttpOperator.cc 
 LogicalOperator.cc 
 Merger.cc 
+QueryStringOperator.cc 
 QueueImport.cc 
 RecordParser.cc 
 RuntimeOperator.cc 
