@@ -29,7 +29,16 @@ public:
 
     // Handle empty
     if (0 == sz) {
-      throw std::runtime_error("Not implemented yet");
+      switch(mState) {
+      case VALUE_START:
+      case VALUE:
+	mProcessor->onQueryStringValue(NULL, 0, true);
+	mState = FIELD_START;
+	return 0;
+      default:
+	// TODO: Error instead of throw
+	throw std::runtime_error("Invalid query string");
+      }
     }
 
     // Initialize Marks
@@ -64,17 +73,17 @@ public:
       case FIELD:
 	if (*c == mFieldValueSeparator) {
 	  mState = VALUE_START;
-	  mProcessor->onQueryStringField(fieldMark, c - fieldMark);
+	  mProcessor->onQueryStringField(fieldMark, c - fieldMark, true);
 	  fieldMark = NULL;
 	} 
 	// TODO: Validate other characters?
 	break;
       case VALUE_START:
 	if (*c == mPairSeparator) {
-	  // Empty value OK but leave it as a NULL
-	  // (or should we call onQueryStringValue with empty?)
-	  // Might be better to call with empty to distinguish
+	  // Empty value OK call onQueryStringValue with empty
+	  // string to distinguish
 	  // case the field is present with empty from not present.
+	  mProcessor->onQueryStringValue(c, 0, true);
 	  mState = FIELD_START;
 	  break;
 	} else {
@@ -86,7 +95,7 @@ public:
       case VALUE:
 	if (*c == mPairSeparator) {
 	  mState = FIELD_START;
-	  mProcessor->onQueryStringValue(valueMark, c - valueMark);
+	  mProcessor->onQueryStringValue(valueMark, c - valueMark, true);
 	  valueMark = NULL;
 	} 
 	// TODO: Validate other characters?
@@ -96,11 +105,11 @@ public:
 
     // send any data to callback
     if (fieldMark != NULL) {
-      mProcessor->onQueryStringField(fieldMark, c - data + 1);
+      mProcessor->onQueryStringField(fieldMark, c - fieldMark + 1, false);
       fieldMark = NULL;
     }
     if (valueMark != NULL) {
-      mProcessor->onQueryStringValue(valueMark, c - data + 1);
+      mProcessor->onQueryStringValue(valueMark, c - valueMark + 1, false);
       valueMark = NULL;
     }
   }

@@ -190,8 +190,8 @@ public:
   int32_t onHeadersComplete();
   int32_t onBody(const char * c, size_t length);
   int32_t onMessageComplete();
-  int32_t onQueryStringField(const char * c, size_t length);
-  int32_t onQueryStringValue(const char * c, size_t length);
+  int32_t onQueryStringField(const char * c, size_t length, bool done);
+  int32_t onQueryStringValue(const char * c, size_t length, bool done);
 };
 
 int HttpSession::on_message_begin(http_parser * p)
@@ -429,16 +429,9 @@ int32_t HttpSession::onMessageComplete()
   return 0;
 }
 
-int32_t HttpSession::onQueryStringField(const char * c, size_t length)
+int32_t HttpSession::onQueryStringField(const char * c, size_t length, 
+					bool done)
 {
-  if (mValue.size() > 0) {
-    // TODO: Handle empty value
-    BOOST_ASSERT(mField.size() > 0);
-    BOOST_ASSERT(mRequestType.hasField(mField));
-    mRequestType.setField(mField, mValue, mBuffer);
-    mField.clear();
-    mValue.clear();
-  }
   // Like onHeaderField except we urldecode 
   mField.reserve(mField.size() + length);
   const char * end = c + length;
@@ -487,17 +480,18 @@ int32_t HttpSession::onQueryStringField(const char * c, size_t length)
       break;
     }
   }
-  return 0;
-}
-
-int32_t HttpSession::onQueryStringValue(const char * c, size_t length)
-{
-  if (mField.size() == 0)
-    return 0;
-  if (!mRequestType.hasField(mField)) {
+  if (done && !mRequestType.hasField(mField)) {
     mField.clear();
     return 0;
   }
+  return 0;
+}
+
+int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
+					bool done)
+{
+  if (mField.size() == 0)
+    return 0;
   // Like onHeaderField except we urldecode 
   mValue.reserve(mValue.size() + length);
   const char * end = c + length;
@@ -545,6 +539,13 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length)
       mDecodeState = PERCENT_DECODE_START;
       break;
     }
+  }
+  if (done) {
+    BOOST_ASSERT(mField.size() > 0);
+    BOOST_ASSERT(mRequestType.hasField(mField));
+    mRequestType.setField(mField, mValue, mBuffer);
+    mField.clear();
+    mValue.clear();
   }
   return 0;
 }

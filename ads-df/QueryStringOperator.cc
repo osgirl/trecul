@@ -84,23 +84,13 @@ public:
   {
   }  
 
-  int32_t onQueryStringField(const char * c, size_t length);
-  int32_t onQueryStringValue(const char * c, size_t length);
+  int32_t onQueryStringField(const char * c, size_t length, bool done);
+  int32_t onQueryStringValue(const char * c, size_t length, bool done);
 };
 
-int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length)
+int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length,
+						bool done)
 {
-  if (mValue.size() > 0) {
-    // TODO: Handle empty value
-    QueryStringTempRecord::const_iterator it = 
-      getMyOperatorType().mQueryStringFields.find(mField);
-    BOOST_ASSERT(mField.size() > 0);
-    BOOST_ASSERT(it != getMyOperatorType().mQueryStringFields.end());
-    it->second.SetVariableLengthString(mTemporary, mValue.c_str(), 
-				       mValue.size());
-    mField.clear();
-    mValue.clear();
-  }
   // Like onHeaderField except we urldecode 
   mField.reserve(mField.size() + length);
   const char * end = c + length;
@@ -149,18 +139,21 @@ int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length)
       break;
     }
   }
+  // Check if we are processing this field.  If not clear the
+  // field so we don't bother processing the value.
+  if (done &&
+      getMyOperatorType().mQueryStringFields.end() ==
+      getMyOperatorType().mQueryStringFields.find(mField)) {
+    mField.clear();
+  }
   return 0;
 }
 
-int32_t QueryStringOperator::onQueryStringValue(const char * c, size_t length)
+int32_t QueryStringOperator::onQueryStringValue(const char * c, size_t length,
+						bool done)
 {
   if (mField.size() == 0)
     return 0;
-  if (getMyOperatorType().mQueryStringFields.end() ==
-      getMyOperatorType().mQueryStringFields.find(mField)) {
-    mField.clear();
-    return 0;
-  }
   // Like onHeaderField except we urldecode 
   mValue.reserve(mValue.size() + length);
   const char * end = c + length;
@@ -209,6 +202,17 @@ int32_t QueryStringOperator::onQueryStringValue(const char * c, size_t length)
       break;
     }
   }
+  if (done) {
+    // TODO: Handle empty value
+    QueryStringTempRecord::const_iterator it = 
+      getMyOperatorType().mQueryStringFields.find(mField);
+    BOOST_ASSERT(mField.size() > 0);
+    BOOST_ASSERT(it != getMyOperatorType().mQueryStringFields.end());
+    it->second.SetVariableLengthString(mTemporary, mValue.c_str(), 
+				       mValue.size());
+    mField.clear();
+    mValue.clear();
+  }
   return 0;
 }
 
@@ -219,6 +223,7 @@ void QueryStringOperator::parseQueryString()
   if (!opType.mQueryString.isNull(mBuffer)) {
     Varchar * input = opType.mQueryString.getVarcharPtr(mBuffer);
     mParser.parse(input->c_str(), input->size());
+    mParser.parse(NULL, 0);
   }
   getMyOperatorType().mTransfer->execute(mBuffer, mTemporary, mOutput, 
 					 mRuntimeContext, false, false);
@@ -236,7 +241,8 @@ QueryStringTempRecord::QueryStringTempRecord(const RecordType * ty)
 {
   for(RecordType::const_member_iterator m = ty->begin_members(),
 	e = ty->end_members(); m != e; ++m) {
-    mFields[m->GetName()] = ty->getFieldAddress(m->GetName());
+    const std::string & nm(m->GetName());
+    mFields[nm] = ty->getFieldAddress(nm);
   }  
 }
 
