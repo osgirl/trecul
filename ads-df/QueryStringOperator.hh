@@ -47,6 +47,7 @@ public:
       fieldMark = data;
       break;
     case VALUE_START:
+    case VALUE:
       valueMark = data;
     default:
       break;
@@ -79,11 +80,18 @@ public:
 	// TODO: Validate other characters?
 	break;
       case VALUE_START:
-	if (*c == mPairSeparator) {
+	if (*c == mPairSeparator ||
+	    *c == '\n') {
 	  // Empty value OK call onQueryStringValue with empty
 	  // string to distinguish
 	  // case the field is present with empty from not present.
 	  mProcessor->onQueryStringValue(c, 0, true);
+	  if (*c == '\n') {
+	    // This is not standard but is specific to DLR
+	    // aggregation.
+	    // Yuck.
+	    mProcessor->onQueryStringComplete();
+	  }
 	  mState = FIELD_START;
 	  break;
 	} else {
@@ -93,9 +101,15 @@ public:
 	}
 	// TODO: Validate other characters?
       case VALUE:
-	if (*c == mPairSeparator) {
+	if (*c == mPairSeparator || *c == '\n') {
 	  mState = FIELD_START;
 	  mProcessor->onQueryStringValue(valueMark, c - valueMark, true);
+	  if (*c == '\n') {
+	    // This is not standard but is specific to DLR
+	    // aggregation.
+	    // Yuck.
+	    mProcessor->onQueryStringComplete();
+	  }
 	  valueMark = NULL;
 	} 
 	// TODO: Validate other characters?
@@ -105,11 +119,11 @@ public:
 
     // send any data to callback
     if (fieldMark != NULL) {
-      mProcessor->onQueryStringField(fieldMark, c - fieldMark + 1, false);
+      mProcessor->onQueryStringField(fieldMark, end - fieldMark, false);
       fieldMark = NULL;
     }
     if (valueMark != NULL) {
-      mProcessor->onQueryStringValue(valueMark, c - valueMark + 1, false);
+      mProcessor->onQueryStringValue(valueMark, end - valueMark, false);
       valueMark = NULL;
     }
   }

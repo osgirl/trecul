@@ -62,14 +62,17 @@ public:
 	  break;
 	}
 
-	// TODO: Parse the field...
+	// Parse the field...
 	parseQueryString();
+	getMyOperatorType().mFree.free(mBuffer);
+	mBuffer = RecordBuffer();
 
 	requestWrite(0);
 	mState = WRITE;
 	return;
       case WRITE:
 	write(port, mOutput, false);
+	mOutput = RecordBuffer();
       }
 
       requestWrite(0);
@@ -86,6 +89,11 @@ public:
 
   int32_t onQueryStringField(const char * c, size_t length, bool done);
   int32_t onQueryStringValue(const char * c, size_t length, bool done);
+  int32_t onQueryStringComplete()
+  {
+    // TODO: Should we handle parsing multiple query strings?
+    return 0;
+  }
 };
 
 int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length,
