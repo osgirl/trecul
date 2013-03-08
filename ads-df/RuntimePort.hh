@@ -193,6 +193,7 @@ public:
 
   void Pop(_T& elmt) {
     mHead->Pop(elmt);
+    BOOST_ASSERT(mSize > 0);
     mSize -= 1;
     if (mHead->GetSize() == 0 && mHead->mNext != 0) {
       RuntimeFifoPage<_T, N> * tmp = mHead;
@@ -387,6 +388,13 @@ public:
     request_node_ptr n = request_value_traits::to_node_ptr(*this);
     return request_value_traits::to_value_ptr(n->next_);
   }
+  RuntimePort * request_previous()
+  {
+    request_node_ptr n = request_value_traits::to_node_ptr(*this);
+    return request_value_traits::to_value_ptr(n->prev_);
+  }
+
+  enum PortType { TARGET=0, SOURCE=1 };
 
   static const int32_t DISABLED = -1;
   static const int32_t PENDING_FLUSH = -2;
@@ -415,11 +423,18 @@ private:
    */
   int32_t mQueueIndex;
 
+  /**
+   * Is this a source port or target port.  A source port is one that
+   * a client writes to and a target port is one that a client
+   * reads from.
+   */
+  int32_t mPortType;
 public:
-  RuntimePort() 
+  RuntimePort(PortType portType) 
     :
     mOperator(NULL),
-    mQueueIndex(DISABLED)
+    mQueueIndex(DISABLED),
+    mPortType(portType)
   {
     request_init();
   }
@@ -447,6 +462,12 @@ public:
   void setQueueIndex(int32_t val)  { mQueueIndex = val; }
   void setDisabled() { mQueueIndex = DISABLED; }
   void setPendingFlush() { mQueueIndex = PENDING_FLUSH; }
+  bool isReadWriteOutstanding() const
+  {
+    return mQueueIndex >= 0;
+  }
+
+  int32_t getPortType() const { return mPortType; }
 
   /**
    * Returns the number of elements in the ports local buffer.
@@ -481,6 +502,20 @@ public:
    * channels in the world.
    */
   virtual void sync() =0;
+  /**
+   * For a source port try to push data to target.  This is different
+   * from sync() because it doesn't assume there is an active
+   * write operation on the port.  This is not
+   * guaranteed to work since there may not be any such data and the underlying
+   * channel may not support the operation. Return the number of records
+   * flushed out of the local buffer.
+   * This method is virtual because there are potentially many different 
+   * kinds of channels in the world.
+   */
+  virtual uint64_t flush()
+  {
+    return 0;
+  }
   /**
    * Get the size of the underlying channel.
    */

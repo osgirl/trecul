@@ -360,6 +360,10 @@ protected:
   {
     mServices.requestWriteThrough(&port);
   }
+  void requestIO(RuntimePort & reads, RuntimePort & writes)
+  {
+    mServices.requestIO(&reads, &writes);
+  }
   void write(RuntimePort * port, RecordBuffer buf, bool flush)
   {
     mServices.write(port, buf, flush);

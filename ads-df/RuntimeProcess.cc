@@ -173,6 +173,7 @@ void ServiceCompletionFifo::write(RecordBuffer buf)
   boost::mutex::scoped_lock channelGuard(mLock);
   DataflowSchedulerScopedLock schedGuard(mTargetScheduler);
   mQueue.Push(buf);
+  mRecordsRead += 1;
   mTargetScheduler.reprioritizeReadRequest(*mTarget);   
 }
 

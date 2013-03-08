@@ -178,6 +178,11 @@ public:
   }
 };
 
+/**
+ * A ServiceCompletionPort is a port on which an operator
+ * gets notification that an async service request has 
+ * completed.
+ */
 class ServiceCompletionPort : public RuntimePort
 {
 private:
@@ -186,6 +191,7 @@ private:
 public:
   ServiceCompletionPort(ServiceCompletionFifo& channel)
     :
+    RuntimePort(RuntimePort::TARGET),
     mChannel(channel)
   {
   }

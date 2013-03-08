@@ -63,8 +63,6 @@ RuntimeOperatorProcess::~RuntimeOperatorProcess()
 DataflowScheduler::DataflowScheduler(int32_t partition, int32_t numPartitions)
   :
   mState(INITIALIZED),
-  mReadMask(0),
-  mWriteMask(0),
   mRequestsOutstanding(0),
   mPartition(partition),
   mNumPartitions(numPartitions),
@@ -72,6 +70,8 @@ DataflowScheduler::DataflowScheduler(int32_t partition, int32_t numPartitions)
   mMaxWritesBeforeYield(14*10),
   mIOService(NULL)
 {
+  mQueues[0].mMask = 0;
+  mQueues[1].mMask = 0;
   mIOService = new boost::asio::io_service();
 }
 
@@ -106,8 +106,8 @@ void DataflowScheduler::setOperator(RuntimeOperator * op)
 void DataflowScheduler::cleanup() 
 {
   for(int32_t i=0; i<32; i++) {
-    mReadQueues[i].clear();
-    mWriteQueues[i].clear();
+    mQueues[0].mQueues[i].clear();
+    mQueues[1].mQueues[i].clear();
   }
   mDisabled.clear();
 }
@@ -118,7 +118,8 @@ void DataflowScheduler::runOperator(RuntimePort & port)
   // This also has the important side effect of clearing the read/write request 
   // that lead to this operator being scheduled.
   port.sync();
-
+  BOOST_ASSERT(port.getPortType() == RuntimePort::SOURCE ||
+	       port.getLocalBuffer().getSize() > 0);
   mCurrentPort = &port;
   do {
     RuntimePort * tmp = mCurrentPort;
@@ -137,6 +138,9 @@ void DataflowScheduler::runOperator(RuntimePort & port)
     // operator that starts to read the next presorted run.
     RuntimeOperator & op(tmp->getOperator());
     op.onEvent(tmp);
+    BOOST_ASSERT(mCurrentPort == NULL ||
+		 mCurrentPort->getPortType() == RuntimePort::SOURCE ||
+		 mCurrentPort->getLocalBuffer().getSize() > 0);
   } while (mCurrentPort != NULL);
 
   while(!mFlush.empty()) {
@@ -163,25 +167,7 @@ void DataflowScheduler::writeAndSync(RuntimePort * port, RecordBuffer buf)
   port->sync();
 }
 
-void DataflowScheduler::internalRequestRead(RuntimePort * ports)
-{
-  // TODO: Add assertions
-  boost::mutex::scoped_lock sl(mLock);
-  RuntimePort * it = ports;
-  do {
-    RuntimePort &  port (*it);
-    BOOST_ASSERT(RuntimePort::DISABLED == port.getQueueIndex());
-    mDisabled.erase(mDisabled.iterator_to(port));
-    int32_t priority = getReadPriority(port.getSize());
-    mReadQueues[priority].push_back(port);
-    mReadMask |= (1 << priority);
-    port.setQueueIndex(priority);
-    mRequestsOutstanding += 1;
-    it = it->request_next();
-  } while (it != ports);
-}
-
-void DataflowScheduler::internalRequestWrite(RuntimePort * ports)
+void DataflowScheduler::internalRequestIO(RuntimePort * ports)
 {
   // TODO: Add assertions
   boost::mutex::scoped_lock sl(mLock);
@@ -191,15 +177,16 @@ void DataflowScheduler::internalRequestWrite(RuntimePort * ports)
     // If someone has written a bunch of flush records to the output queue,
     // we can wind up here in FLUSH_PENDING.  The common case is that
     // we are in here with DISABLED.
-    BOOST_ASSERT(0 > port.getQueueIndex());
+    BOOST_ASSERT(!port.isReadWriteOutstanding());
+    Queue & q(mQueues[port.getPortType()]);
     if (RuntimePort::DISABLED == port.getQueueIndex()) {
       mDisabled.erase(mDisabled.iterator_to(port));
     } else {
       mFlush.erase(mFlush.iterator_to(port));
     }
-    int32_t priority = getWritePriority(port.getSize());
-    mWriteQueues[priority].push_back(port);
-    mWriteMask |= (1<<priority);
+    int32_t priority = getPriority(port);
+    q.mQueues[priority].push_back(port);
+    q.mMask |= (1<<priority);
     port.setQueueIndex(priority);
     mRequestsOutstanding += 1;
     it = it->request_next();
@@ -217,9 +204,9 @@ void DataflowScheduler::internalRequestFlush(RuntimePort * ports)
     RuntimePort &  port (*it);
     BOOST_ASSERT(RuntimePort::PENDING_FLUSH == port.getQueueIndex());
     mFlush.erase(mDisabled.iterator_to(port));
-    int32_t priority = getWritePriority(port.getSize());
-    mWriteQueues[priority].push_back(port);
-    mWriteMask |= (1<<priority);
+    int32_t priority = getPriority(port);
+    mQueues[1].mQueues[priority].push_back(port);
+    mQueues[1].mMask |= (1<<priority);
     port.setQueueIndex(priority);
     mRequestsOutstanding += 1;
     it = it->request_next();
@@ -268,7 +255,7 @@ DataflowScheduler::runSome(int64_t maxIterations)
   mState = RUNNING;
   while(mRequestsOutstanding && --maxIterations >= 0) {
     mLock.lock();
-    uint32_t bitmask = mReadMask;
+    uint32_t bitmask = mQueues[0].mMask;
     uint32_t bitOffset;
     uint8_t zeroFlag;
     __asm__ ("bsrl %2, %%eax;\n\t"
@@ -278,8 +265,8 @@ DataflowScheduler::runSome(int64_t maxIterations)
 	     : "r"(bitmask)
 	     : "%eax");
     if (!zeroFlag && bitOffset > 0) {
-      BOOST_ASSERT(!mReadQueues[bitOffset].empty());
-      RuntimePort& port(mReadQueues[bitOffset].front());
+      BOOST_ASSERT(!mQueues[0].mQueues[bitOffset].empty());
+      RuntimePort& port(mQueues[0].mQueues[bitOffset].front());
       // RuntimeOperator& op(port.getOperator());
       mLock.unlock();
       {
@@ -290,7 +277,7 @@ DataflowScheduler::runSome(int64_t maxIterations)
       continue;
     }
 
-    bitmask = mWriteMask;
+    bitmask = mQueues[1].mMask;
     __asm__ ("bsrl %2, %%eax;\n\t"
 	     "movl %%eax, %0;\n\t"
 	     "setzb %1;\n\t"
@@ -298,8 +285,8 @@ DataflowScheduler::runSome(int64_t maxIterations)
 	     : "r"(bitmask)
 	     : "%eax");
     if(!zeroFlag && bitOffset>0) {
-      BOOST_ASSERT(!mWriteQueues[bitOffset].empty());
-      RuntimePort& port(mWriteQueues[bitOffset].front());
+      BOOST_ASSERT(!mQueues[1].mQueues[bitOffset].empty());
+      RuntimePort& port(mQueues[1].mQueues[bitOffset].front());
       // RuntimeOperator& op(port.getOperator());
       mLock.unlock();
 
@@ -359,7 +346,28 @@ void DataflowScheduler::run()
   init();
   while(!runSome()) {
     // All requests are blocked; must be something to wait for
-    // in IO land.  Only block on the first request because it 
+    // in IO land.  
+    
+    // First give a crack at processing IO without blocking
+    // We don't want to flush buffers yet because we want to 
+    // maintain throughput until we are sure that we are stalling
+    // due to IO waits.
+    std::size_t processed = mIOService->poll();
+    if (0 != processed) {
+      // An IO completed so try to run operators again
+      mIOService->reset();
+      continue;
+    }
+    // Hmmm.  No IOs were ready but we may have some records
+    // hanging out in port buffers that we can try to flush
+    // through the system.  This isn't good for throughput but
+    // we also want reasonable latency for records to be processed
+    // and IO completions may take a while to arrive.
+    if (flushSomePortBuffers()) {
+      continue;
+    }
+    // There REALLY isn't anything to do but wait.
+    // Only block on the first request because it 
     // may result in us having more work to do while subsequent 
     // IO's may not be ready yet and we shouldn't need to wait for them.
     mIOService->run_one();
@@ -369,10 +377,10 @@ void DataflowScheduler::run()
     // alertable state.
     // if (0 == --spins) {
     //   std::cout << "Scheduler blocked mRequestsOutstanding=" << mRequestsOutstanding << std::endl;
-    //   if (mReadMask & 1) {
+    //   if (mQueues[0].mMask & 1) {
     // 	// Iterate through and report back on who is blocked.
-    // 	for(RuntimePort::SchedulerQueue::iterator it = mReadQueues[0].begin(); 
-    // 	    it != mReadQueues[0].end();
+    // 	for(RuntimePort::SchedulerQueue::iterator it = mQueues[0].mQueues[0].begin(); 
+    // 	    it != mQueues[0].mQueues[0].end();
     // 	    ++it) {
     // 	  // Scan to find the blocked port.
     // 	  std::size_t portNum=0;
@@ -385,10 +393,10 @@ void DataflowScheduler::run()
     // 	  std::cout << "Blocked on read: op=" << it->getOperator().getName().c_str() << "; port=" << portNum << std::endl;
     // 	}
     //   }
-    //   if (mWriteMask & 1) {
+    //   if (mQueues[1].mMask & 1) {
     // 	// Iterate through and report back on who is blocked.
-    // 	for(RuntimePort::SchedulerQueue::iterator it = mWriteQueues[0].begin(); 
-    // 	    it != mWriteQueues[0].end();
+    // 	for(RuntimePort::SchedulerQueue::iterator it = mQueues[1].mQueues[0].begin(); 
+    // 	    it != mQueues[1].mQueues[0].end();
     // 	    ++it) {
     // 	  std::cout << "Blocked on write: " << it->getOperator().getName().c_str() << std::endl;
     // 	}
@@ -400,13 +408,36 @@ void DataflowScheduler::run()
   complete();
 }
 
+bool DataflowScheduler::flushSomePortBuffers()
+{
+  // Walk the disabled ports and flush some which have
+  // records in local output buffer.
+  // TODO: Perhaps we should only do this for write ports
+  // that are connected to read that is blocked.  One trick
+  // with that is that the corresponding write port may not
+  // belong to this scheduler.  Furthermore
+  // iterating on a shared queue is much more complicated.
+  // Note we do not have to lock the disabled ports since it
+  // is state owned exclusively by this scheduler.  
+  for(RuntimePort::SchedulerQueue::iterator p = mDisabled.begin(),
+	e = mDisabled.end(); p != e; ++p) {
+    if (p->flush() != 0) {
+      // RuntimeOperator& op(p->getOperator());
+      // std::cout << "Successfully flushed a local write buffer" <<
+      // 	" on operator: " << op.getName().c_str() << std::endl;
+      return true;
+    }
+  }
+  return false;
+}
+
 void DataflowScheduler::scheduleFlush(RuntimePort & port)
 {
-  if (0 <= port.getQueueIndex()) {
+  if (port.isReadWriteOutstanding()) {
     std::cout << "DataflowScheduler::scheduleFlush port.getQueueIndex()=" << port.getQueueIndex() << std::endl;
   }
   // Port cannot have active request
-  BOOST_ASSERT(0 > port.getQueueIndex());
+  BOOST_ASSERT(!port.isReadWriteOutstanding());
   // No problem writing multiple times with flush requested
   if (RuntimePort::PENDING_FLUSH == port.getQueueIndex()) return;
   // Only other case is disabled.
@@ -429,31 +460,16 @@ bool DataflowScheduler::readWouldBlock(RuntimePort & ports)
   return true;
 }
 
-void DataflowScheduler::readComplete(RuntimePort & ports)
+void DataflowScheduler::ioComplete(RuntimePort & ports)
 {
   RuntimePort * it = &ports;
   do {
     RuntimePort & port(*it);
-    BOOST_ASSERT(port.getQueueIndex()>=0);
-    mReadQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
-    if (mReadQueues[port.getQueueIndex()].empty())
-      mReadMask &= ~(1 << port.getQueueIndex());
-    mRequestsOutstanding -= 1;
-    mDisabled.push_back(port);
-    port.setDisabled();
-    it = it->request_next();
-  } while(it != &ports);
-}
-
-void DataflowScheduler::writeComplete(RuntimePort & ports)
-{
-  RuntimePort * it = &ports;
-  do {
-    RuntimePort & port(*it);
-    BOOST_ASSERT(port.getQueueIndex()>=0);
-    mWriteQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
-    if (mWriteQueues[port.getQueueIndex()].empty()) 
-      mWriteMask &= ~(1 << port.getQueueIndex());
+    BOOST_ASSERT(port.isReadWriteOutstanding());
+    Queue & q(mQueues[port.getPortType()]);
+    q.mQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
+    if (q.mQueues[port.getQueueIndex()].empty()) 
+      q.mMask &= ~(1 << port.getQueueIndex());
     mRequestsOutstanding -= 1;
     mDisabled.push_back(port);
     port.setDisabled();
@@ -465,13 +481,13 @@ void DataflowScheduler::reprioritizeReadRequest(RuntimePort & port)
 {
   // Grab the current size of the port and see if it has changed from currently
   // scheduled priority. Do this only if the port has an outstanding request.
-  int32_t newPriority = getReadPriority(port.getSize());
-  if (port.getQueueIndex() >= 0 && newPriority != port.getQueueIndex()) {
-    mReadQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
-    if (mReadQueues[port.getQueueIndex()].empty())
-      mReadMask &= ~(1 << port.getQueueIndex());
-    mReadQueues[newPriority].push_back(port);
-    mReadMask |= (1 << newPriority);
+  int32_t newPriority = getPriority(port);
+  if (port.isReadWriteOutstanding() && newPriority != port.getQueueIndex()) {
+    mQueues[0].mQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
+    if (mQueues[0].mQueues[port.getQueueIndex()].empty())
+      mQueues[0].mMask &= ~(1 << port.getQueueIndex());
+    mQueues[0].mQueues[newPriority].push_back(port);
+    mQueues[0].mMask |= (1 << newPriority);
     port.setQueueIndex(newPriority);
   }
 }
@@ -480,13 +496,13 @@ void DataflowScheduler::reprioritizeWriteRequest(RuntimePort & port)
 {
   // Grab the current size of the port and see if it has changed from currently
   // scheduled priority. Do this only if the port has an outstanding request.
-  int32_t newPriority = getWritePriority(port.getSize());
-  if (port.getQueueIndex() >= 0 && newPriority != port.getQueueIndex()) {
-    mWriteQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
-    if (mWriteQueues[port.getQueueIndex()].empty())
-      mWriteMask &= ~(1 << port.getQueueIndex());
-    mWriteQueues[newPriority].push_back(port);
-    mWriteMask |= (1 << newPriority);
+  int32_t newPriority = getPriority(port);
+  if (port.isReadWriteOutstanding() && newPriority != port.getQueueIndex()) {
+    mQueues[1].mQueues[port.getQueueIndex()].erase(RuntimePort::SchedulerQueue::s_iterator_to(port));
+    if (mQueues[1].mQueues[port.getQueueIndex()].empty())
+      mQueues[1].mMask &= ~(1 << port.getQueueIndex());
+    mQueues[1].mQueues[newPriority].push_back(port);
+    mQueues[1].mMask |= (1 << newPriority);
     port.setQueueIndex(newPriority);
   }
 }
@@ -508,8 +524,8 @@ InProcessFifo::InProcessFifo(DataflowScheduler & sourceScheduler,
   mTargetScheduler(targetScheduler),
   mBuffered(buffered)
 {
-  mSource = new InProcessPort<InProcessFifo>(*this);
-  mTarget = new InProcessPort<InProcessFifo>(*this);
+  mSource = new InProcessPort<InProcessFifo>(RuntimePort::SOURCE, *this);
+  mTarget = new InProcessPort<InProcessFifo>(RuntimePort::TARGET, *this);
 }
 
 InProcessFifo::~InProcessFifo()
@@ -524,6 +540,27 @@ void InProcessFifo::sync(InProcessPort<InProcessFifo> & port)
     readAllFromPort();
   else
     writeSomeToPort();
+}
+
+uint64_t InProcessFifo::flush(InProcessPort<InProcessFifo> & port)
+{
+  if (&port == mSource) {
+    boost::mutex::scoped_lock channelGuard(mLock);
+    // Only flush if the channel queue is empty.
+    if(0 != mQueue.getSize()) {
+      return 0;
+    }
+    TwoDataflowSchedulerScopedLock schedGuard(mSourceScheduler,
+					      mTargetScheduler);
+    uint64_t sz = mSource->getLocalBuffer().getSize();
+    if (sz != 0) {
+      mSource->getLocalBuffer().popAndPushAllTo(mQueue);
+      mTargetScheduler.reprioritizeReadRequest(*mTarget); 
+    }
+    return sz;
+  } else {
+    return 0;
+  }
 }
 
 void InProcessFifo::writeSomeToPort()
@@ -587,7 +624,7 @@ RemoteReceiveFifo::RemoteReceiveFifo(DataflowScheduler & sourceScheduler, Datafl
 {
   mAvailableSource = new DataAvailablePort(*this);
   mDataSource = new ReceiveDataPort(*this);
-  mTarget = new InProcessPort<RemoteReceiveFifo>(*this);
+  mTarget = new InProcessPort<RemoteReceiveFifo>(RuntimePort::TARGET, *this);
 }
 
 RemoteReceiveFifo::~RemoteReceiveFifo()

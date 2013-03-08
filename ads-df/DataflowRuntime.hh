@@ -102,8 +102,10 @@ private:
   _Fifo & mChannel;
 
 public:
-  InProcessPort(_Fifo& channel)
+  InProcessPort(RuntimePort::PortType portType,
+		_Fifo& channel)
     :
+    RuntimePort(portType),
     mChannel(channel)
   {
   }
@@ -116,6 +118,11 @@ public:
    * Transfer between local endpoint and the channel fifo.
    */
   void sync() { mChannel.sync(*this); }
+  
+  /**
+   * Try to flush data out of the endpoint.
+   */
+  uint64_t flush() { return mChannel.flush(*this); }
   
   /**
    * Return the size of the attached channel.
@@ -191,6 +198,11 @@ public:
    * Implement sync on behalf of the ports.
    */
   void sync(InProcessPort<InProcessFifo> & port);
+
+  /**
+   * Implement flush on behalf of the ports.
+   */
+  uint64_t flush(InProcessPort<InProcessFifo> & port);
 
   /**
    * Move a chunk of data from the channel queue into the target port 
@@ -305,6 +317,14 @@ public:
   void sync(uint64_t available);
 
   /**
+   * Implement flush on behalf of the ports.
+   */
+  uint64_t flush(InProcessPort<RemoteReceiveFifo> & port)
+  {
+    return 0;
+  }
+
+  /**
    * Move a chunk of data from the channel queue into the target port 
    * local cache.   Reach into the scheduler(s) associated with the ports and
    * notify them about the event.
@@ -355,6 +375,7 @@ private:
 public:
   DataAvailablePort(RemoteReceiveFifo& channel)
     :
+    RuntimePort(RuntimePort::SOURCE),
     mChannel(channel)
   {
   }
@@ -409,6 +430,7 @@ private:
 public:
   ReceiveDataPort(RemoteReceiveFifo& channel)
     :
+    RuntimePort(RuntimePort::SOURCE),
     mChannel(channel)
   {
   }
@@ -473,18 +495,20 @@ private:
   SchedulerState mState;
 
   /**
-   * Read queues for different priorities.
-   * Bitmask inidicating whether a queue in mReadQueues is empty or not.
+   * Read/write queues for different priorities.
+   * Bitmask inidicating whether a queue in mQueues is empty or not.
    */
-  uint32_t mReadMask;
-  RuntimePort::SchedulerQueue mReadQueues[32];
+  struct Queue
+  {
+    uint32_t mMask;
+    RuntimePort::SchedulerQueue mQueues[32];
+  };
 
   /**
-   * Write queues for different priorities.
-   * Bitmask inidicating whether a queue in mWriteQueues is empty or not.
+   * Position 0 is read queues (target ports)
+   * Position 1 is write queues (source ports)
    */
-  uint32_t mWriteMask;
-  RuntimePort::SchedulerQueue mWriteQueues[32];
+  Queue mQueues[2];
 
   /**
    * Ports that have no pending read or write request
@@ -508,16 +532,27 @@ private:
   int32_t mPartition;
   int32_t mNumPartitions;
 
+  /**
+   * Put a mixed list of read/write requests onto the scheduler
+   * queues.
+   */
+  void internalRequestIO(RuntimePort * port);
+
   /** 
    * Put a list of read requests onto the scheduler queues.
    */
-  void internalRequestRead(RuntimePort * port);
+  void internalRequestRead(RuntimePort * port)
+  {
+    internalRequestIO(port);
+  }
 
   /** 
    * Put a list of write requests onto the scheduler queues.
-   * Assumes they are on the disabled queue.
    */
-  void internalRequestWrite(RuntimePort * port);
+  void internalRequestWrite(RuntimePort * port)
+  {
+    internalRequestIO(port);
+  }
 
   /** 
    * Put a list of write requests onto the scheduler queues.
@@ -611,6 +646,19 @@ private:
    * Schedule a port for later flush.
    */
   void scheduleFlush(RuntimePort & port);
+
+  /**
+   * Walk through some write ports and flush them.
+   * We do this when there is no visible work to do
+   * and we are about to make a decision to block waiting
+   * for an external event (IO completion).  Since that
+   * IO event may be a long time in coming we don't want to
+   * leave any work around.
+   * Returns true if some buffers were actually flushed false otherwise.
+   */
+  bool flushSomePortBuffers();
+
+  void ioComplete(RuntimePort & ports);
 
 public:
   DataflowScheduler(int32_t partition=0, int32_t numPartitions=1);
@@ -727,8 +775,10 @@ public:
   {
     // If any request in the list can be satisfied
     // out of local queue then do it.
+    BOOST_ASSERT(mCurrentPort == NULL);
     RuntimePort * it = ports;
     do {
+      BOOST_ASSERT(it->getPortType() == RuntimePort::TARGET);
       if(it->getLocalSize()) {
 	mCurrentPort = &*it;
 	return;
@@ -744,8 +794,10 @@ public:
     if (mState != STARTING) {
       // A write is satisfied immediately if the corresponding local queue
       // is small enough.
+      BOOST_ASSERT(mCurrentPort == NULL);
       RuntimePort * it = ports;
       do {
+	BOOST_ASSERT(it->getPortType() == RuntimePort::SOURCE);
 	if(it->getLocalSize() < mMaxWritesBeforeYield) {
 	  mCurrentPort = &*it;
 	  return;
@@ -765,6 +817,46 @@ public:
   {
     // Pass the request on to be queued and we yield.
     internalRequestWrite(ports);
+  }
+  /**
+   * Request some mix of reads and writes.
+   */
+  void requestIO(RuntimePort * reads,
+		 RuntimePort * writes)
+  {
+    BOOST_ASSERT(mCurrentPort == NULL);
+    // Handle unblocked reads as highest priority
+    RuntimePort * it = reads;
+    do {
+      if(it->getLocalSize()) {
+	BOOST_ASSERT(it->getPortType() == RuntimePort::TARGET);
+	mCurrentPort = &*it;
+	return;
+      }
+      it = it->request_next();
+    } while (it != reads);
+    // Handle unblocked writes as next if not starting
+    if (mState != STARTING) {
+      // A write is satisfied immediately if the corresponding local queue
+      // is small enough.
+      RuntimePort * it = writes;
+      do {
+	BOOST_ASSERT(it->getPortType() == RuntimePort::SOURCE);
+	if(it->getLocalSize() < mMaxWritesBeforeYield) {
+	  mCurrentPort = &*it;
+	  return;
+	}
+	it = it->request_next();
+      } while (it != writes);
+    }
+
+    // Pass the request on to be queued and we yield.
+    // Be sure to glue the request together in a request list.
+    // request_link_after doesn't handle splicing entire lists
+    // so we only support single write port here.
+    BOOST_ASSERT(writes->request_unique());
+    reads->request_previous()->request_link_after(*writes);
+    internalRequestIO(reads);
   }
   void read(RuntimePort * port, RecordBuffer& buf)
   {
@@ -800,8 +892,20 @@ public:
    */
   bool readWouldBlock(RuntimePort & ports);
 
-  void readComplete(RuntimePort & port);
-  void writeComplete(RuntimePort & port);
+  /**
+   * Tell the scheduler that a read has finished.
+   */
+  void readComplete(RuntimePort & port)
+  {
+    ioComplete(port);
+  }
+  /**
+   * Tell the scheduler that a write has finished.
+   */
+  void writeComplete(RuntimePort & port)
+  {
+    ioComplete(port);
+  }
   void reprioritizeReadRequest(RuntimePort & port);
   void reprioritizeWriteRequest(RuntimePort & port);
 
@@ -828,6 +932,12 @@ public:
   static int32_t getWritePriority(uint64_t sz)
   {
     return 31-getReadPriority(sz);
+  }
+
+  static int32_t getPriority(RuntimePort& port)
+  {
+    return port.getPortType() == RuntimePort::SOURCE ?
+      getWritePriority(port.getSize()) : getReadPriority(port.getSize());
   }
 
   /**
