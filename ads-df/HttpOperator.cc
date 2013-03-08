@@ -1,3 +1,4 @@
+#include <deque>
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
 #include <boost/format.hpp>
@@ -143,7 +144,8 @@ public:
   enum State { START, READ, WRITE };
   State mState;
   boost::asio::ip::tcp::socket * mSocket;
-  RecordBuffer mBuffer;
+  RecordTypeMalloc mMalloc;
+  std::deque<RecordBuffer> mBuffers;
   http_parser mParser;
   http_parser_settings mParserSettings;
   bool mMessageComplete;
@@ -155,6 +157,7 @@ public:
   char * mIO;
   const HttpRequestType& mRequestType;
   QueryStringParser<HttpSession> mQueryStringParser;
+  int32_t mQueueIndex;
 
   // For processing name-value pairs (headers or query string
   // parameters).
@@ -167,7 +170,7 @@ public:
   void close();
   
   HttpSession(boost::asio::ip::tcp::socket * socket,
-	      RecordBuffer buf,
+	      const RecordTypeMalloc & recordMalloc,
 	      const HttpRequestType & requestType);
   ~HttpSession();
   boost::asio::ip::tcp::socket& socket()
@@ -176,8 +179,17 @@ public:
   }
   bool completed() const;
   bool error() const;
-  RecordBuffer buffer();
+  std::deque<RecordBuffer> & buffers();
   void onEvent(ServiceCompletionPort * p);
+
+  int32_t getQueueIndex() const
+  {
+    return mQueueIndex;
+  }
+  void setQueueIndex(int32_t queueIndex)
+  {
+    mQueueIndex = queueIndex;
+  }
 
   /**
    * Parser callbacks
@@ -192,6 +204,7 @@ public:
   int32_t onMessageComplete();
   int32_t onQueryStringField(const char * c, size_t length, bool done);
   int32_t onQueryStringValue(const char * c, size_t length, bool done);
+  int32_t onQueryStringComplete();
 };
 
 int HttpSession::on_message_begin(http_parser * p)
@@ -216,7 +229,7 @@ int HttpSession::on_header_value(http_parser * p, const char * c, size_t length)
 }
 int HttpSession::on_headers_complete(http_parser * p)
 {
-  return ((HttpSession*) p->data)->onStatusComplete();
+  return ((HttpSession*) p->data)->onHeadersComplete();
 }
 int HttpSession::on_body(http_parser * p, const char * c, size_t length)
 {
@@ -228,12 +241,12 @@ int HttpSession::on_message_complete(http_parser * p)
 }
 
 HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
-			 RecordBuffer buf,
+			 const RecordTypeMalloc & recordMalloc,
 			 const HttpRequestType& requestType)
   :
   mState(START),
   mSocket(socket),
-  mBuffer(buf),
+  mMalloc(recordMalloc),
   mMessageComplete(false),
   mResponseComplete(false),
   mFreeBuffer(true),
@@ -241,6 +254,7 @@ HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
   mIO(new char [8192]),
   mRequestType(requestType),
   mQueryStringParser(this),
+  mQueueIndex(0),
   mDecodeState(PERCENT_DECODE_START),
   mDecodeChar(0)
 {
@@ -254,6 +268,7 @@ HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
   mParserSettings.on_headers_complete = on_headers_complete;
   mParserSettings.on_body = on_body;
   mParserSettings.on_message_complete = on_message_complete;
+  mBuffers.push_back(mMalloc.malloc());
 }
 
 HttpSession::~HttpSession()
@@ -285,9 +300,9 @@ bool HttpSession::error() const
   return false;
 }
 
-RecordBuffer HttpSession::buffer()
+std::deque<RecordBuffer>& HttpSession::buffers()
 {
-  return mBuffer;
+  return mBuffers;
 }
 
 void HttpSession::handleRead(HttpSession * session,
@@ -336,6 +351,8 @@ void HttpSession::onEvent(ServiceCompletionPort * p)
 					mIOSize);
       if (mParser.http_errno != HPE_OK) {
 	// TODO: Just error out this request
+	const char * errName = ::http_errno_name(HTTP_PARSER_ERRNO(&mParser));
+	const char * errDesc = ::http_errno_description(HTTP_PARSER_ERRNO(&mParser));
 	throw std::runtime_error("Invalid request");	
       }
       if (mParser.upgrade) {
@@ -376,7 +393,7 @@ int32_t HttpSession::onMessageBegin()
 
 int32_t HttpSession::onUrl(const char * c, size_t length)
 {
-  mRequestType.appendUrl(c, c+length, mBuffer);
+  mRequestType.appendUrl(c, c+length, mBuffers.back());
   return 0;
 }
 
@@ -391,7 +408,7 @@ int32_t HttpSession::onHeaderField(const char * c, size_t length)
     // TODO: Handle empty value
     BOOST_ASSERT(mField.size() > 0);
     BOOST_ASSERT(mRequestType.hasField(mField));
-    mRequestType.setField(mField, mValue, mBuffer);
+    mRequestType.setField(mField, mValue, mBuffers.back());
     mField.clear();
     mValue.clear();
   }
@@ -413,13 +430,18 @@ int32_t HttpSession::onHeaderValue(const char * c, size_t length)
 
 int32_t HttpSession::onHeadersComplete()
 {
+  if (mField.size() > 0) {
+    mRequestType.setField(mField, mValue, mBuffers.back());
+    mField.clear();
+    mValue.clear();
+  }
   return 0;
 }
 
 int32_t HttpSession::onBody(const char * c, size_t length)
 {
   mQueryStringParser.parse(c, length);
-  mRequestType.appendBody(c, c+length, mBuffer);
+  mRequestType.appendBody(c, c+length, mBuffers.back());
   return 0;
 }
 
@@ -543,11 +565,16 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
   if (done) {
     BOOST_ASSERT(mField.size() > 0);
     BOOST_ASSERT(mRequestType.hasField(mField));
-    mRequestType.setField(mField, mValue, mBuffer);
+    mRequestType.setField(mField, mValue, mBuffers.back());
     mField.clear();
     mValue.clear();
   }
   return 0;
+}
+
+int32_t HttpSession::onQueryStringComplete()
+{
+  mBuffers.push_back(mMalloc.malloc());
 }
 
 class HttpReadOperator : public RuntimeOperatorBase<HttpReadOperatorType>
@@ -556,9 +583,14 @@ private:
   enum State { START, WAIT, WRITE_EOF };
   State mState;  
   boost::asio::ip::tcp::acceptor * mAcceptor;
-  // Sessions that are still processing requests
+  HttpSession * mAcceptingSession;
+  // Sessions that are still processing requests and
+  // have no output records available.
   HttpSession::SessionQueue mOpenSessions;
-  // Sessions that are ready to write
+  // Sessions that are still parsing but have an output
+  // record ready.
+  HttpSession::SessionQueue mOutputReadySessions;
+  // Sessions that are done parsing
   HttpSession::SessionQueue mCompletedSessions;
   RecordBuffer mBuffer;
   boost::asio::io_service& mIOService;
@@ -614,20 +646,80 @@ public:
     // accept a connection
     using boost::asio::ip::tcp;
     HttpSession * session = new HttpSession(new tcp::socket(mIOService),
-					    getMyOperatorType().mMalloc.malloc(),
+					    getMyOperatorType().mMalloc,
 					    getMyOperatorType().mRequestType);
     mAcceptor->async_accept(session->socket(),
 			    boost::bind(&HttpReadOperator::handleAccept, 
 					&(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo()),
 					boost::asio::placeholders::error));
-    mOpenSessions.push_back(*session);
+    mAcceptingSession = session;
+  }
+
+  void requestIOs()
+  {
+    // TODO: Figure out an abstraction for this horrifically 
+    // non intuitive issue: the requestIO method may link the 
+    // completion port and output port to make sure they are both
+    // dequeued from the scheduler request queues when one of them
+    // is scheduled.  If they remain linked subsequent calls will 
+    // relink them.  Rethink the API here.
+    getCompletionPorts()[0]->request_unlink();
+    // END TODO
+    if (mCompletedSessions.empty() &&
+	mOutputReadySessions.empty()) {
+      requestCompletion(0);
+    } else {
+      requestIO(*getCompletionPorts()[0], *getOutputPorts()[0]);
+    }
+  }
+
+  void dequeue(HttpSession& session)
+  {
+    switch(session.getQueueIndex()) {
+    case 1:
+      mOpenSessions.erase(mOpenSessions.iterator_to(session));
+      break;
+    case 2:
+      mOutputReadySessions.erase(mOutputReadySessions.iterator_to(session));
+      break;
+    case 3:
+      mCompletedSessions.erase(mCompletedSessions.iterator_to(session));
+      break;
+    default:
+      break;
+    }
+    session.setQueueIndex(0);
+  }
+
+  void enqueueOpen(HttpSession& session)
+  {
+    if (session.getQueueIndex() == 1) return;
+    dequeue(session);
+    mOpenSessions.push_back(session);
+    session.setQueueIndex(1);
+  }
+
+  void enqueueOutputReady(HttpSession& session)
+  {
+    if (session.getQueueIndex() == 2) return;
+    dequeue(session);
+    mOutputReadySessions.push_back(session);
+    session.setQueueIndex(2);
+  }
+
+  void enqueueCompleted(HttpSession& session)
+  {
+    if (session.getQueueIndex() == 3) return;
+    dequeue(session);
+    mCompletedSessions.push_back(session);
+    session.setQueueIndex(3);
   }
 
   void onEvent(RuntimePort * port)
   {
     switch(mState) {
     case START:
-      requestCompletion(0);
+      requestIOs();
       accept();
       while(true) {
 	mState = WAIT;
@@ -637,9 +729,10 @@ public:
 	  read(port, mBuffer);
 	  // Is this a new connection or a read for a session
 	  if (isAccept(mBuffer)) {
-	    requestCompletion(0);
-	    // Start the session and accept a new connection.
-	    mOpenSessions.back().onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
+	    // Start the session and accept a new connection.	    
+	    mAcceptingSession->onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
+	    enqueueOpen(*mAcceptingSession);
+	    mAcceptingSession = NULL;
 	    accept();
 	  } else {
 	    // Move session forward; if newly completed then we
@@ -647,30 +740,36 @@ public:
 	    HttpSession & session (getSession(mBuffer));
 	    session.onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
 	    if (session.completed()) {
-	      if(mCompletedSessions.empty()) {
-		requestWrite(0);
-	      }
-	      mOpenSessions.erase(mOpenSessions.iterator_to(session));
-	      mCompletedSessions.push_back(session);
+	      enqueueCompleted(session);
 	    } else if (session.error()) {
-	      mOpenSessions.erase(mOpenSessions.iterator_to(session));
+	      dequeue(session);
+	      // TODO: Logging....
 	      delete &session;
+	    } else if (session.buffers().size() > 1) {
+	      enqueueOutputReady(session);
 	    }
 	    // TODO: How to shut down gracefully; I think if not listening
 	    // and no more open sessions then don't request completion.
-	    requestCompletion(0);
 	  }
 	} else {
 	  // Write an output record.
-	  BOOST_ASSERT(!mCompletedSessions.empty());
-	  HttpSession & session(mCompletedSessions.front());
-	  write(port, session.buffer(), true);
-	  mCompletedSessions.pop_front();
-	  delete &session;
-	  if (!mCompletedSessions.empty()) {
-	    requestWrite(0);
+	  // TODO: Priority?
+	  BOOST_ASSERT(!mCompletedSessions.empty() ||
+		       !mOutputReadySessions.empty());
+	  HttpSession & session(mOutputReadySessions.empty() ?
+				mCompletedSessions.front() :
+				mOutputReadySessions.front());
+	  write(port, session.buffers().front(), false);
+	  session.buffers().pop_front();
+	  if (0 == session.buffers().size()) {
+	    dequeue(session);
+	    delete &session;
+	  } else if (!session.completed() && session.buffers().size() == 1) {
+	    enqueueOpen(session);
 	  }
 	}
+	// Make next request for IO based on current server state.
+	requestIOs();
       }
 
       // All done close up shop.
@@ -743,38 +842,10 @@ void LogicalHttpRead::check(PlanCheckContext& ctxt)
   members.push_back(RecordMember("RequestUrl", VarcharType::Get(ctxt, true))); 
   members.push_back(RecordMember("body", VarcharType::Get(ctxt, true)));
 
-  // Query string parameters of interest
+  // Query string parameters of interest from Ghost
   members.push_back(RecordMember("v", VarcharType::Get(ctxt, true)));
   members.push_back(RecordMember("c", VarcharType::Get(ctxt, true)));
-  // TODO: Namespace for query strings?
   members.push_back(RecordMember("url", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("dE", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("cS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("cE", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("rqS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("rsS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("rsE", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("sS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("dl", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("di", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("dlS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("dlE", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("dc", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("leS", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("leE", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("to", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("ol", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("cr", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("mt", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("mb", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("b", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("u", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("ua", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("pl", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("us", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("gh", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("t", VarcharType::Get(ctxt, true)));
-
   members.push_back(RecordMember("cip", VarcharType::Get(ctxt, true)));
   members.push_back(RecordMember("eb", VarcharType::Get(ctxt, true)));
   members.push_back(RecordMember("ev", VarcharType::Get(ctxt, true)));
@@ -792,6 +863,33 @@ void LogicalHttpRead::check(PlanCheckContext& ctxt)
   members.push_back(RecordMember("network", VarcharType::Get(ctxt, true)));
   members.push_back(RecordMember("network_type", VarcharType::Get(ctxt, true)));
   
+  // members.push_back(RecordMember("dE", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("cS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("cE", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("rqS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("rsS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("rsE", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("sS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("dl", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("di", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("dlS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("dlE", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("dc", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("leS", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("leE", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("to", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("ol", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("cr", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("mt", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("mb", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("b", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("u", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("ua", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("pl", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("us", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("gh", VarcharType::Get(ctxt, true)));
+  // members.push_back(RecordMember("t", VarcharType::Get(ctxt, true)));
+
   getOutput(0)->setRecordType(RecordType::get(ctxt, members));
 }
 
