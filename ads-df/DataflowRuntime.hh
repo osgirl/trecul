@@ -637,6 +637,14 @@ private:
    */
   boost::asio::io_service * mIOService;
 
+  /**
+   * These statistics tell us something about how the scheduler
+   * is behaving with respect to processing IO completions.
+   */
+  std::size_t mNumIOPoll;
+  std::size_t mNumInternalWriteBufferFlush;
+  std::size_t mNumIOWaits;
+
   /** 
    * Run an operator for a bit of time.
    */

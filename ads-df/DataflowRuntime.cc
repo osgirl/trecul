@@ -68,7 +68,10 @@ DataflowScheduler::DataflowScheduler(int32_t partition, int32_t numPartitions)
   mNumPartitions(numPartitions),
   mCurrentPort(NULL),
   mMaxWritesBeforeYield(14*10),
-  mIOService(NULL)
+  mIOService(NULL),
+  mNumIOPoll(0),
+  mNumInternalWriteBufferFlush(0),
+  mNumIOWaits(0)
 {
   mQueues[0].mMask = 0;
   mQueues[1].mMask = 0;
@@ -351,11 +354,13 @@ void DataflowScheduler::run()
     // First give a crack at processing IO without blocking
     // We don't want to flush buffers yet because we want to 
     // maintain throughput until we are sure that we are stalling
-    // due to IO waits.
+    // due to IO waits.  Could also opt to busy wait (poll multiple
+    // times) for a bit before giving up.
     std::size_t processed = mIOService->poll();
     if (0 != processed) {
       // An IO completed so try to run operators again
       mIOService->reset();
+      mNumIOPoll += 1;
       continue;
     }
     // Hmmm.  No IOs were ready but we may have some records
@@ -363,16 +368,22 @@ void DataflowScheduler::run()
     // through the system.  This isn't good for throughput but
     // we also want reasonable latency for records to be processed
     // and IO completions may take a while to arrive.
+    // A more conservative policy would be that we allow waiting for an
+    // IO completion for some period of time before opting to 
+    // flush buffers.
     if (flushSomePortBuffers()) {
+      mNumInternalWriteBufferFlush += 1;
       continue;
     }
-    // There REALLY isn't anything to do but wait.
+
+    // We've concluded there REALLY isn't anything to do but wait.
     // Only block on the first request because it 
-    // may result in us having more work to do while subsequent 
+    // will likely result in us having more work to do while subsequent 
     // IO's may not be ready yet and we shouldn't need to wait for them.
     mIOService->run_one();
     mIOService->poll();
     mIOService->reset();
+    mNumIOWaits += 1;
     // TODO: Should spin for a bit and then wait in an
     // alertable state.
     // if (0 == --spins) {
