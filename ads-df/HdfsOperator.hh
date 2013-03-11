@@ -128,6 +128,36 @@ public:
   static bool isEOF(file_type f);
 };
 
+class MultiFileCreationPolicy
+{
+public:
+  friend class MultiFileCreation;
+private:
+  std::string mHdfsFile;
+  // Transfer to calculate any expressions in the
+  // file string.
+  IQLTransferModule * mTransfer;
+  RecordTypeFree * mTransferFree;
+  FieldAddress * mTransferOutput;
+
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive & ar, const unsigned int version)
+  {
+    ar & BOOST_SERIALIZATION_NVP(mHdfsFile);
+    ar & BOOST_SERIALIZATION_NVP(mTransfer);
+    ar & BOOST_SERIALIZATION_NVP(mTransferFree);
+    ar & BOOST_SERIALIZATION_NVP(mTransferOutput);
+  }
+public:
+  MultiFileCreationPolicy();
+  MultiFileCreationPolicy(const std::string& hdfsFile,
+			  const RecordTypeTransfer * argTransfer);
+  ~MultiFileCreationPolicy();
+  class MultiFileCreation * create(int32_t partition) const;
+};
+
 class RuntimeHdfsWriteOperatorType : public RuntimeOperatorType
 {
   friend class RuntimeHdfsWriteOperator;
@@ -136,17 +166,12 @@ private:
   RecordTypeFree mFree;
   std::string mHdfsHost;
   int32_t mHdfsPort;
-  std::string mHdfsFile;
   int32_t mBufferSize;
   int32_t mReplicationFactor;
   int32_t mBlockSize;
   std::string mHeader;
   std::string mHeaderFile;
-  // Transfer to calculate any expressions in the
-  // file string.
-  IQLTransferModule * mTransfer;
-  RecordTypeFree * mTransferFree;
-  FieldAddress * mTransferOutput;
+  MultiFileCreationPolicy * mCreationPolicy;
   
   // Serialization
   friend class boost::serialization::access;
@@ -158,21 +183,16 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mFree);
     ar & BOOST_SERIALIZATION_NVP(mHdfsHost);
     ar & BOOST_SERIALIZATION_NVP(mHdfsPort);
-    ar & BOOST_SERIALIZATION_NVP(mHdfsFile);
     ar & BOOST_SERIALIZATION_NVP(mBufferSize);
     ar & BOOST_SERIALIZATION_NVP(mReplicationFactor);
     ar & BOOST_SERIALIZATION_NVP(mBlockSize);
     ar & BOOST_SERIALIZATION_NVP(mHeader);
     ar & BOOST_SERIALIZATION_NVP(mHeaderFile);
-    ar & BOOST_SERIALIZATION_NVP(mTransfer);
-    ar & BOOST_SERIALIZATION_NVP(mTransferFree);
-    ar & BOOST_SERIALIZATION_NVP(mTransferOutput);
+    ar & BOOST_SERIALIZATION_NVP(mCreationPolicy);
   }
   RuntimeHdfsWriteOperatorType()
     :
-    mTransfer(NULL),
-    mTransferFree(NULL),
-    mTransferOutput(NULL)
+    mCreationPolicy(NULL)
   {
   }
 public:

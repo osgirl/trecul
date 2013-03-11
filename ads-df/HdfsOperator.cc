@@ -1048,41 +1048,90 @@ void HdfsFileRename::dispose()
   }
 }
 
-class RuntimeHdfsWriteOperator : public RuntimeOperator
+class OutputFile
+{
+public:
+  hdfsFile File;
+  ZLibCompress Compressor;
+  OutputFile(hdfsFile f) 
+    :
+    File(f)
+  {
+  }
+  void flush(HdfsFileSystemImplPtr fileSystem)
+  {
+    // Flush data through the compressor.
+    this->Compressor.put(NULL, 0, true);
+    while(true) {
+      this->Compressor.run();
+      uint8_t * output;
+      std::size_t outputLen;
+      this->Compressor.consumeOutput(output, outputLen);
+      if (outputLen > 0) {
+	fileSystem->write(this->File, output, outputLen);
+      } else {
+	break;
+      }
+    }    
+    // Flush data to disk
+    fileSystem->flush(this->File);
+  }
+  void close(HdfsFileSystemImplPtr fileSystem) {
+    // Clean close of file and file system
+    fileSystem->close(this->File);
+  }
+};
+
+/**
+ * This policy supports keeping multiple files open
+ * for writes and a close policy that defers to the file
+ * committer.
+ */
+class MultiFileCreation
+{
+private:
+  const MultiFileCreationPolicy& mPolicy;
+  PathPtr mRootUri;
+  HdfsFileSystemImplPtr mFileSystem;
+  InterpreterContext * mRuntimeContext;
+  std::map<std::string, OutputFile *> mFile;
+  HdfsFileCommitter * mCommitter;
+  int32_t mPartition;
+
+  OutputFile * createFile(const std::string& filePath,
+			  class RuntimeHdfsWriteOperator * factory);
+  void add(const std::string& filePath, OutputFile * of)
+  {
+    mFile[filePath] = of;
+  }
+public:
+  MultiFileCreation(const MultiFileCreationPolicy& policy, 
+		    int32_t partition);
+  ~MultiFileCreation();
+  void start(HdfsFileSystemImplPtr fileSystem, PathPtr rootUri,
+	     class RuntimeHdfsWriteOperator * fileFactory);
+  OutputFile * onRecord(RecordBuffer input,
+			class RuntimeHdfsWriteOperator * fileFactory);
+  void close(bool flush);
+  void commit(std::string& err);
+};
+
+class RuntimeHdfsWriteOperator : public RuntimeOperatorBase<RuntimeHdfsWriteOperatorType>
 {
 public:
   void writeToHdfs(RecordBuffer input, bool isEOS);  
 private:
   enum State { START, READ };
   State mState;
-  const RuntimeHdfsWriteOperatorType &  getHdfsWriteType() 
-  {
-    return *reinterpret_cast<const RuntimeHdfsWriteOperatorType *>(&getOperatorType());
-  }
-
-  class OutputFile
-  {
-  public:
-    hdfsFile File;
-    ZLibCompress Compressor;
-    OutputFile(hdfsFile f) 
-      :
-      File(f)
-    {
-    }
-  };
 
   PathPtr mRootUri;
   HdfsFileSystemImplPtr mFileSystem;
-  std::map<std::string, OutputFile *> mFile;
   RuntimePrinter mPrinter;
   AsyncWriter<RuntimeHdfsWriteOperator> mWriter;
   boost::thread * mWriterThread;
   HdfsFileCommitter * mCommitter;
   std::string mError;
-  InterpreterContext * mRuntimeContext;
-
-  void createFile(const std::string& filePath);
+  MultiFileCreation * mCreationPolicy;
 
   void renameTempFile();
   /**
@@ -1090,8 +1139,8 @@ private:
    */
   bool hasInlineHeader() 
   {
-    return getHdfsWriteType().mHeader.size() != 0 && 
-      getHdfsWriteType().mHeaderFile.size()==0;
+    return getMyOperatorType().mHeader.size() != 0 && 
+      getMyOperatorType().mHeaderFile.size()==0;
   }
   /**
    * Is this operator writing a header file?
@@ -1099,37 +1148,68 @@ private:
   bool hasHeaderFile()
   {
     return getPartition() == 0 && 
-      getHdfsWriteType().mHeader.size() != 0 && 
-      getHdfsWriteType().mHeaderFile.size()!=0;  
+      getMyOperatorType().mHeader.size() != 0 && 
+      getMyOperatorType().mHeaderFile.size()!=0;  
   }
   
 public:
-  RuntimeHdfsWriteOperator(RuntimeOperator::Services& services, const RuntimeOperatorType& opType);
+  RuntimeHdfsWriteOperator(RuntimeOperator::Services& services, const RuntimeHdfsWriteOperatorType& opType);
   ~RuntimeHdfsWriteOperator();
   void start();
   void onEvent(RuntimePort * port);
   void shutdown();
+
+  /**
+   * Create a file
+   */
+  OutputFile * createFile(PathPtr filePath);
 };
 
-RuntimeHdfsWriteOperator::RuntimeHdfsWriteOperator(RuntimeOperator::Services& services, const RuntimeOperatorType& opType)
+MultiFileCreationPolicy::MultiFileCreationPolicy()
   :
-  RuntimeOperator(services, opType),
-  mState(START),
-  mPrinter(getHdfsWriteType().mPrint),
-  mWriter(*this),
-  mWriterThread(NULL),
-  mCommitter(NULL),
-  mRuntimeContext(NULL)
+  mTransfer(NULL),
+  mTransferFree(NULL),
+  mTransferOutput(NULL)
 {
-  if (NULL != getHdfsWriteType().mTransfer) {
+}
+
+MultiFileCreationPolicy::MultiFileCreationPolicy(const std::string& hdfsFile,
+						 const RecordTypeTransfer * argTransfer)
+  :
+  mHdfsFile(hdfsFile),
+  mTransfer(argTransfer ? argTransfer->create() : NULL),
+  mTransferFree(argTransfer ? new RecordTypeFree(argTransfer->getTarget()->getFree()) : NULL),
+  mTransferOutput(argTransfer ? new FieldAddress(*argTransfer->getTarget()->begin_offsets()) : NULL)
+{
+}
+
+MultiFileCreationPolicy::~MultiFileCreationPolicy()
+{
+  delete mTransfer;
+  delete mTransferFree;
+  delete mTransferOutput;
+}
+
+MultiFileCreation * MultiFileCreationPolicy::create(int32_t partition) const
+{
+  return new MultiFileCreation(*this, partition);
+}
+
+MultiFileCreation::MultiFileCreation(const MultiFileCreationPolicy& policy,
+				     int32_t partition)
+  :
+  mPolicy(policy),
+  mRuntimeContext(NULL),
+  mCommitter(NULL),
+  mPartition(partition)
+{
+  if (NULL != policy.mTransfer) {
     mRuntimeContext = new InterpreterContext();
   }
 }
 
-RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
+MultiFileCreation::~MultiFileCreation()
 {
-  delete mWriterThread;
-  
   for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
 	end = mFile.end(); it != end; ++it) {
     if (it->second->File) {
@@ -1139,6 +1219,122 @@ RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
       it->second->File = NULL;
     }
   }
+
+  if (mCommitter) {
+    HdfsFileCommitter::release(mCommitter);
+    mCommitter = NULL;
+  }
+}
+
+OutputFile * MultiFileCreation::createFile(const std::string& filePath,
+					   RuntimeHdfsWriteOperator * factory)
+{
+  // We create a temporary file name and write to that.  When
+  // complete we'll rename the file.  This should make things safe
+  // in case multiple copies of the operator are trying to write
+  // to the same file (e.g. running in Hadoop with speculative execution).
+  // The temporary file name must have the pattern serial_ddddd
+  // so that it uses the appropriate block placement policy.
+  std::string tmpStr = FileSystem::getTempFileName();
+
+  std::stringstream str;
+  str << filePath << "/" << tmpStr << "_serial_" << 
+    std::setw(5) << std::setfill('0') << mPartition <<
+    ".gz";
+  PathPtr tempPath = Path::get(mRootUri, str.str());
+  std::stringstream permFile;
+  permFile << filePath + "/serial_" << 
+    std::setw(5) << std::setfill('0') << mPartition <<
+    ".gz";  
+  if (mCommitter == NULL) {
+    mCommitter = HdfsFileCommitter::get();
+  }
+  mCommitter->track(tempPath, 
+		    Path::get(mRootUri, permFile.str()), 
+		    mFileSystem);
+  // Call back to the factory to actually create the file
+  OutputFile * of = factory->createFile(tempPath);
+  add(filePath, of);
+  return of;
+}
+
+void MultiFileCreation::start(HdfsFileSystemImplPtr fileSystem, 
+			      PathPtr rootUri,
+			      RuntimeHdfsWriteOperator * factory)
+{
+  mFileSystem = fileSystem;
+  mRootUri = rootUri;
+  // If statically defined path, create and open file here.
+  if (0 != mPolicy.mHdfsFile.size()) {
+    createFile(mPolicy.mHdfsFile, factory);
+  }
+}
+
+OutputFile * MultiFileCreation::onRecord(RecordBuffer input,
+					 RuntimeHdfsWriteOperator * factory)
+{
+  if (NULL == mRuntimeContext) {
+    return mFile.begin()->second;
+  } else {
+    RecordBuffer output;
+    mPolicy.mTransfer->execute(input, output, mRuntimeContext, false);
+    std::string fileName(mPolicy.mTransferOutput->getVarcharPtr(output)->c_str());
+    mPolicy.mTransferFree->free(output);
+    mRuntimeContext->clear();
+    std::map<std::string, OutputFile *>::iterator it = mFile.find(fileName);
+    if (mFile.end() == it) {
+      std::cout << "Creating file: " << fileName.c_str() << std::endl;
+      return createFile(fileName, factory);
+    }
+    return it->second;
+  }
+}
+
+void MultiFileCreation::close(bool flush)
+{
+  for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
+	end = mFile.end(); it != end; ++it) {
+    if (it->second->File != NULL) {
+      if (flush) {
+	it->second->flush(mFileSystem);
+      }
+      it->second->close(mFileSystem);
+      it->second->File = NULL;
+    }
+  }
+}
+
+void MultiFileCreation::commit(std::string& err)
+{
+  // Put the file(s) in its final place.
+  for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
+	end = mFile.end(); it != end; ++it) {    
+    if(!mCommitter->commit()) {
+      err = mCommitter->getError();
+      break;
+    } 
+  }
+}
+
+RuntimeHdfsWriteOperator::RuntimeHdfsWriteOperator(RuntimeOperator::Services& services, 
+						   const RuntimeHdfsWriteOperatorType& opType)
+  :
+  RuntimeOperatorBase<RuntimeHdfsWriteOperatorType>(services, opType),
+  mState(START),
+  mPrinter(getMyOperatorType().mPrint),
+  mWriter(*this),
+  mWriterThread(NULL),
+  mCommitter(NULL),
+  mCreationPolicy(opType.mCreationPolicy->create(getPartition()))
+{
+}
+
+RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
+{
+  delete mWriterThread;
+
+  delete mCreationPolicy;
+  
   if (mCommitter) {
     HdfsFileCommitter::release(mCommitter);
     mCommitter = NULL;
@@ -1151,45 +1347,21 @@ RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
     // hdfsDisconnect(mFileSystem);
     mFileSystem = HdfsFileSystemImplPtr();
   }
-  delete mRuntimeContext;
 }
 
-void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
+OutputFile * RuntimeHdfsWriteOperator::createFile(PathPtr filePath)
 {
   // TODO: Check if file exists
   // TODO: Make sure file is cleaned up in case of failure.
-  // We create a temporary file name and write to that.  When
-  // complete we'll rename the file.  This should make things safe
-  // in case multiple copies of the operator are trying to write
-  // to the same file (e.g. running in Hadoop with speculative execution).
-  // The temporary file name must have the pattern serial_ddddd
-  // so that it uses the appropriate block placement policy.
-  std::string tmpStr = FileSystem::getTempFileName();
-
-  std::stringstream str;
-  str << filePath << "/" << tmpStr << "_serial_" << 
-    std::setw(5) << std::setfill('0') << getPartition() <<
-    ".gz";
-  PathPtr tempPath = Path::get(mRootUri, str.str());
-  std::stringstream permFile;
-  permFile << filePath + "/serial_" << 
-    std::setw(5) << std::setfill('0') << getPartition() <<
-    ".gz";  
-  if (mCommitter == NULL) {
-    mCommitter = HdfsFileCommitter::get();
-  }
-  mCommitter->track(tempPath, 
-		    Path::get(mRootUri, permFile.str()), 
-		    mFileSystem);
-  hdfsFile f = mFileSystem->open_for_write(tempPath,
-					   getHdfsWriteType().mBufferSize,
-					   getHdfsWriteType().mReplicationFactor,
-					   /*getHdfsWriteType().mBlockSize*/2000000000);
+  hdfsFile f = mFileSystem->open_for_write(filePath,
+					   getMyOperatorType().mBufferSize,
+					   getMyOperatorType().mReplicationFactor,
+					   /*getMyOperatorType().mBlockSize*/2000000000);
   OutputFile * of = new OutputFile(f);
   if (hasInlineHeader()) {
     // We write in-file header for every partition
-    of->Compressor.put((const uint8_t *) getHdfsWriteType().mHeader.c_str(), 
-		       getHdfsWriteType().mHeader.size(), 
+    of->Compressor.put((const uint8_t *) getMyOperatorType().mHeader.c_str(), 
+		       getMyOperatorType().mHeader.size(), 
 		       false);
     while(!of->Compressor.run()) {
       uint8_t * output;
@@ -1198,9 +1370,7 @@ void RuntimeHdfsWriteOperator::createFile(const std::string& filePath)
       mFileSystem->write(of->File, output, outputLen);
     }
   } 
-
-  // Associate file with path.
-  mFile[filePath] = of;
+  return of;
 }
 
 void RuntimeHdfsWriteOperator::start()
@@ -1208,34 +1378,33 @@ void RuntimeHdfsWriteOperator::start()
   // Connect to the file system
   // TODO: Convert write operator to use a URI
   std::string uriStr = (boost::format("hdfs://%1%:%2%/") %
-			getHdfsWriteType().mHdfsHost %
-			getHdfsWriteType().mHdfsPort).str();
+			getMyOperatorType().mHdfsHost %
+			getMyOperatorType().mHdfsPort).str();
   mRootUri = Path::get(uriStr);
   mFileSystem = HdfsFileSystemImpl::get(mRootUri->getUri());
-
-  // If statically defined path, create and open file here.
-  if (0 != getHdfsWriteType().mHdfsFile.size()) {
-    createFile(getHdfsWriteType().mHdfsFile);
-  }
+  
+  mCreationPolicy->start(mFileSystem, mRootUri, this);
 
   if (hasHeaderFile()) {
-    BOOST_ASSERT(getHdfsWriteType().mTransfer == NULL);
-    PathPtr headerPath = Path::get(getHdfsWriteType().mHeaderFile);
+    PathPtr headerPath = Path::get(getMyOperatorType().mHeaderFile);
     std::string tmpHeaderStr = FileSystem::getTempFileName();
     PathPtr tmpHeaderPath = Path::get(mRootUri, 
 				      "/tmp/headers/" + tmpHeaderStr);
+    if (mCommitter == NULL) {
+      mCommitter = HdfsFileCommitter::get();
+    }
     mCommitter->track(tmpHeaderPath, headerPath, mFileSystem);
     hdfsFile headerFile = 
       mFileSystem->open_for_write(tmpHeaderPath,
-				  getHdfsWriteType().mBufferSize,
-				  getHdfsWriteType().mReplicationFactor,
-				  getHdfsWriteType().mBlockSize);
+				  getMyOperatorType().mBufferSize,
+				  getMyOperatorType().mReplicationFactor,
+				  getMyOperatorType().mBlockSize);
     if (headerFile == NULL) {
       throw std::runtime_error("Couldn't create header file");
     }
     mFileSystem->write(headerFile, 
-		       &getHdfsWriteType().mHeader[0], 
-		       (tSize) getHdfsWriteType().mHeader.size());
+		       &getMyOperatorType().mHeader[0], 
+		       (tSize) getMyOperatorType().mHeader.size());
     mFileSystem->close(headerFile);
   }
   // Start a thread that will write
@@ -1248,14 +1417,7 @@ void RuntimeHdfsWriteOperator::start()
 
 void RuntimeHdfsWriteOperator::renameTempFile()
 {
-  // Put the file(s) in its final place.
-  for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
-	end = mFile.end(); it != end; ++it) {    
-    if(!mCommitter->commit()) {
-      mError = mCommitter->getError();
-      break;
-    } 
-  }
+  mCreationPolicy->commit(mError);
 
   if (0 == mError.size() && hasHeaderFile()) {
     // Commit the header file as well.
@@ -1274,25 +1436,9 @@ void RuntimeHdfsWriteOperator::renameTempFile()
 void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
 {
   if (!isEOS) {
-    OutputFile * of = NULL;
-    if (NULL == mRuntimeContext) {
-      of = mFile.begin()->second;
-    } else {
-      RecordBuffer output;
-      getHdfsWriteType().mTransfer->execute(input, output, mRuntimeContext, false);
-      std::string fileName(getHdfsWriteType().mTransferOutput->getVarcharPtr(output)->c_str());
-      getHdfsWriteType().mTransferFree->free(output);
-      mRuntimeContext->clear();
-      std::map<std::string, OutputFile *>::iterator it = mFile.find(fileName);
-      if (mFile.end() == it) {
-	std::cout << "Creating file: " << fileName.c_str() << std::endl;
-	createFile(fileName);
-	it = mFile.find(fileName);
-      }
-      of = it->second;
-    }
+    OutputFile * of = mCreationPolicy->onRecord(input, this);
     mPrinter.print(input);
-    getHdfsWriteType().mFree.free(input);
+    getMyOperatorType().mFree.free(input);
     of->Compressor.put((const uint8_t *) mPrinter.c_str(), mPrinter.size(), false);
     while(!of->Compressor.run()) {
       uint8_t * output;
@@ -1302,27 +1448,7 @@ void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
     }
     mPrinter.clear();
   } else {
-    for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
-	  end = mFile.end(); it != end; ++it) {
-      // Flush data through the compressor.
-      it->second->Compressor.put(NULL, 0, true);
-      while(true) {
-	it->second->Compressor.run();
-	uint8_t * output;
-	std::size_t outputLen;
-	it->second->Compressor.consumeOutput(output, outputLen);
-	if (outputLen > 0) {
-	  mFileSystem->write(it->second->File, output, outputLen);
-	} else {
-	  break;
-	}
-      }    
-      // Flush data to disk
-      mFileSystem->flush(it->second->File);
-      // Clean close of file and file system
-      mFileSystem->close(it->second->File);
-      it->second->File = NULL;
-    }
+    mCreationPolicy->close(true);
   }
 }
 
@@ -1367,14 +1493,7 @@ void RuntimeHdfsWriteOperator::onEvent(RuntimePort * port)
 
 void RuntimeHdfsWriteOperator::shutdown()
 {
-  for(std::map<std::string, OutputFile*>::iterator it = mFile.begin(),
-	end = mFile.end(); it != end; ++it) {
-    if (it->second->File) {
-      int ret;
-      mFileSystem->close(it->second->File, ret);
-      it->second->File = NULL;
-    }
-  }
+  mCreationPolicy->close(false);
   if (mFileSystem) {
     // Since we are not calling hdfsConnectNewInstance
     // we are sharing references to the same underlying
@@ -1405,23 +1524,18 @@ RuntimeHdfsWriteOperatorType::RuntimeHdfsWriteOperatorType(const std::string& op
   mFree(ty->getFree()),
   mHdfsHost(hdfsHost),
   mHdfsPort(port),
-  mHdfsFile(hdfsFile),
   mBufferSize(bufferSize),
   mReplicationFactor(replicationFactor),
   mBlockSize(blockSize),
   mHeader(header),
   mHeaderFile(headerFile),
-  mTransfer(argTransfer ? argTransfer->create() : NULL),
-  mTransferFree(argTransfer ? new RecordTypeFree(argTransfer->getTarget()->getFree()) : NULL),
-  mTransferOutput(argTransfer ? new FieldAddress(*argTransfer->getTarget()->begin_offsets()) : NULL)
+  mCreationPolicy(new MultiFileCreationPolicy(hdfsFile, argTransfer))
 {
 }
 
 RuntimeHdfsWriteOperatorType::~RuntimeHdfsWriteOperatorType()
 {
-  delete mTransfer;
-  delete mTransferFree;
-  delete mTransferOutput;
+  delete mCreationPolicy;
 }
 
 RuntimeOperator * RuntimeHdfsWriteOperatorType::create(RuntimeOperator::Services& services) const
