@@ -128,7 +128,21 @@ public:
   static bool isEOF(file_type f);
 };
 
-class MultiFileCreationPolicy
+class FileCreationPolicy
+{
+private:
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive & ar, const unsigned int version)
+  {
+  }
+public:
+  virtual ~FileCreationPolicy() {}
+  virtual class FileCreation * create(int32_t partition) const=0;
+};
+
+class MultiFileCreationPolicy : public FileCreationPolicy
 {
 public:
   friend class MultiFileCreation;
@@ -145,6 +159,7 @@ private:
   template <class Archive>
   void serialize(Archive & ar, const unsigned int version)
   {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(FileCreationPolicy);
     ar & BOOST_SERIALIZATION_NVP(mHdfsFile);
     ar & BOOST_SERIALIZATION_NVP(mTransfer);
     ar & BOOST_SERIALIZATION_NVP(mTransferFree);
@@ -155,7 +170,53 @@ public:
   MultiFileCreationPolicy(const std::string& hdfsFile,
 			  const RecordTypeTransfer * argTransfer);
   ~MultiFileCreationPolicy();
-  class MultiFileCreation * create(int32_t partition) const;
+  class FileCreation * create(int32_t partition) const;
+};
+
+/**
+ * Controls the creation of write file(s).  
+ * For example, do we create a single file for the entire
+ * run of the operator or do we periodically cut files based on
+ * time or record counts.
+ */
+class StreamingFileCreationPolicy : public FileCreationPolicy
+{
+  friend class StreamingFileCreation;
+private:
+  /**
+   * Directory in which to create files.
+   */
+  std::string mBaseDir;
+
+  /**
+   * Max amount of time to write to a file in seconds.
+   * If this is 0 then there is no time limit.
+   */
+  std::size_t mFileSeconds;
+  
+  /**
+   * Max number of records to write to a file..
+   * If this is 0 then there is no record limit.
+   */
+  std::size_t mFileRecords;
+
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive & ar, const unsigned int version)
+  {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(FileCreationPolicy);
+    ar & BOOST_SERIALIZATION_NVP(mBaseDir);
+    ar & BOOST_SERIALIZATION_NVP(mFileSeconds);
+    ar & BOOST_SERIALIZATION_NVP(mFileRecords);
+  }
+
+public:
+  StreamingFileCreationPolicy(const std::string& baseDir,
+			      std::size_t fileSeconds=0,
+			      std::size_t fileRecords=0);
+  ~StreamingFileCreationPolicy();
+  class FileCreation * create(int32_t partition) const;
 };
 
 class RuntimeHdfsWriteOperatorType : public RuntimeOperatorType
@@ -171,7 +232,7 @@ private:
   int32_t mBlockSize;
   std::string mHeader;
   std::string mHeaderFile;
-  MultiFileCreationPolicy * mCreationPolicy;
+  FileCreationPolicy * mCreationPolicy;
   
   // Serialization
   friend class boost::serialization::access;
@@ -200,10 +261,9 @@ public:
 			       const RecordType * ty, 
 			       const std::string& hdfsHost, 
 			       int32_t port, 
-			       const std::string& hdfsFile,
 			       const std::string& header,
 			       const std::string& headerFile,
-			       const RecordTypeTransfer * argTransfer,
+			       FileCreationPolicy * creationPolicy,
 			       int32_t bufferSize=0, 
 			       int32_t replicationFactor=0, 
 			       int32_t blockSize=0);

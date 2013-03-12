@@ -64,6 +64,8 @@
 
 // It appears that one does not need BOOST_CLASS_EXPORT for
 // non polymorphic classes.
+BOOST_CLASS_EXPORT(FileCreationPolicy);
+BOOST_CLASS_EXPORT(MultiFileCreationPolicy);
 BOOST_CLASS_EXPORT(AssignedOperatorType);
 BOOST_CLASS_EXPORT(ConstrainedOperatorType);
 BOOST_CLASS_EXPORT(RuntimeOperatorType);

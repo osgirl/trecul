@@ -595,7 +595,8 @@ void LogicalFileRead::internalCreate(class RuntimePlanBuilder& plan)
 LogicalFileWrite::LogicalFileWrite()
   :
   mMode("binary"),
-  mFileNameExpr(NULL)
+  mFileNameExpr(NULL),
+  mMaxRecords(0)
 {
 }
 
@@ -657,6 +658,8 @@ void LogicalFileWrite::check(PlanCheckContext& ctxt)
     } else if (it->equals("headerfile")) {
       buildHeader(false);
       mHeaderFile = getStringValue(ctxt, *it);
+    } else if (it->equals("maxrecords")) {
+      mMaxRecords = getInt32Value(ctxt, *it);
     } else if (it->equals("mode")) {
       mMode = getStringValue(ctxt, *it);
     } else {
@@ -684,14 +687,17 @@ void LogicalFileWrite::create(class RuntimePlanBuilder& plan)
   URI uri(mConnect.size() ? mConnect.c_str() : mFile.c_str());
   RuntimeOperatorType * opType = NULL;
   if (boost::algorithm::iequals(uri.getScheme(), "hdfs")) {
+    FileCreationPolicy * fcp = mMaxRecords > 0 ?
+      static_cast<FileCreationPolicy*>(new StreamingFileCreationPolicy(uri.getPath(), 0, (std::size_t) mMaxRecords)) :
+      static_cast<FileCreationPolicy*>(new MultiFileCreationPolicy(mConnect.size() ? "" : uri.getPath(),
+								   mFileNameExpr));
     opType = new RuntimeHdfsWriteOperatorType("write",
 					      getInput(0)->getRecordType(),
 					      uri.getHost(),
 					      uri.getPort(),
-					      mConnect.size() ? "" : uri.getPath(),
 					      mHeader,
 					      mHeaderFile,
-					      mFileNameExpr);
+					      fcp);
   } else if (boost::algorithm::iequals("binary", mMode)) {
     opType = new InternalFileWriteOperatorType("write",
 					       getInput(0)->getRecordType(),

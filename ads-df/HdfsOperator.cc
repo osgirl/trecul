@@ -1082,12 +1082,25 @@ public:
   }
 };
 
+class FileCreation
+{
+public:
+  virtual ~FileCreation() {}
+  virtual void start(HdfsFileSystemImplPtr fileSystem, 
+		     PathPtr rootUri,
+		     class RuntimeHdfsWriteOperator * fileFactory)=0;
+  virtual OutputFile * onRecord(RecordBuffer input,
+			class RuntimeHdfsWriteOperator * fileFactory)=0;
+  virtual void close(bool flush)=0;
+  virtual void commit(std::string& err)=0;
+};
+
 /**
  * This policy supports keeping multiple files open
  * for writes and a close policy that defers to the file
  * committer.
  */
-class MultiFileCreation
+class MultiFileCreation : public FileCreation
 {
 private:
   const MultiFileCreationPolicy& mPolicy;
@@ -1116,6 +1129,28 @@ public:
   void commit(std::string& err);
 };
 
+class StreamingFileCreation : public FileCreation
+{
+private:
+  StreamingFileCreationPolicy mPolicy;
+  PathPtr mRootUri;
+  HdfsFileSystemImplPtr mFileSystem;
+  std::size_t mNumRecords;
+  OutputFile * mCurrentFile;
+
+  OutputFile * createFile(const std::string& filePath,
+			  RuntimeHdfsWriteOperator * factory);
+public:
+  StreamingFileCreation(const StreamingFileCreationPolicy& policy);
+  ~StreamingFileCreation();
+  void start(HdfsFileSystemImplPtr fileSystem, PathPtr rootUri,
+	     class RuntimeHdfsWriteOperator * fileFactory);
+  OutputFile * onRecord(RecordBuffer input,
+			class RuntimeHdfsWriteOperator * fileFactory);
+  void close(bool flush);
+  void commit(std::string& err);
+};
+
 class RuntimeHdfsWriteOperator : public RuntimeOperatorBase<RuntimeHdfsWriteOperatorType>
 {
 public:
@@ -1131,7 +1166,7 @@ private:
   boost::thread * mWriterThread;
   HdfsFileCommitter * mCommitter;
   std::string mError;
-  MultiFileCreation * mCreationPolicy;
+  FileCreation * mCreationPolicy;
 
   void renameTempFile();
   /**
@@ -1190,7 +1225,7 @@ MultiFileCreationPolicy::~MultiFileCreationPolicy()
   delete mTransferOutput;
 }
 
-MultiFileCreation * MultiFileCreationPolicy::create(int32_t partition) const
+FileCreation * MultiFileCreationPolicy::create(int32_t partition) const
 {
   return new MultiFileCreation(*this, partition);
 }
@@ -1314,6 +1349,99 @@ void MultiFileCreation::commit(std::string& err)
       break;
     } 
   }
+}
+
+StreamingFileCreationPolicy::StreamingFileCreationPolicy(const std::string& baseDir,
+							 std::size_t fileSeconds,
+							 std::size_t fileRecords)
+  :
+  mBaseDir(baseDir),
+  mFileSeconds(fileSeconds),
+  mFileRecords(fileRecords)
+{
+}
+
+StreamingFileCreationPolicy::~StreamingFileCreationPolicy()
+{
+}
+
+FileCreation * StreamingFileCreationPolicy::create(int32_t partition) const
+{
+  return new StreamingFileCreation(*this);
+}
+
+StreamingFileCreation::StreamingFileCreation(const StreamingFileCreationPolicy& policy)
+  :
+  mPolicy(policy),
+  mNumRecords(0),
+  mCurrentFile(NULL)
+{
+}
+
+StreamingFileCreation::~StreamingFileCreation()
+{
+}
+
+OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
+					       RuntimeHdfsWriteOperator * factory)
+{
+  BOOST_ASSERT(mCurrentFile == NULL);
+  if (mCurrentFile != NULL) {
+    return mCurrentFile;
+  }
+  // We create a temporary file name and write to that.  
+  // Here we are not using a block placement naming scheme 
+  // since we are likely executing on a single partition at this point.
+  // This assumes we have a downstream splitter process that partitions
+  // data.
+  std::string tmpStr = FileSystem::getTempFileName();
+
+  std::stringstream str;
+  str << filePath << "/" << tmpStr << ".gz";
+  PathPtr tempPath = Path::get(mRootUri, str.str());
+  // Call back to the factory to actually create the file
+  mCurrentFile = factory->createFile(tempPath);
+  return mCurrentFile;
+}
+
+void StreamingFileCreation::start(HdfsFileSystemImplPtr fileSystem, 
+				  PathPtr rootUri,
+				  RuntimeHdfsWriteOperator * factory)
+{
+  mFileSystem = fileSystem;
+  mRootUri = rootUri;
+  createFile(mPolicy.mBaseDir, factory);
+}
+
+OutputFile * StreamingFileCreation::onRecord(RecordBuffer input,
+					     RuntimeHdfsWriteOperator * factory)
+{
+  if (0 != mPolicy.mFileRecords && 
+      mPolicy.mFileRecords <= mNumRecords++) {
+    close(true);
+    createFile(mPolicy.mBaseDir, factory);
+    mNumRecords = 0;
+  }
+  return mCurrentFile;
+}
+
+void StreamingFileCreation::close(bool flush)
+{
+  if (mCurrentFile != NULL) {
+    if (flush) {
+      mCurrentFile->flush(mFileSystem);
+    }
+    mCurrentFile->close(mFileSystem);
+    delete mCurrentFile;
+    mCurrentFile = NULL;
+    // TODO: Put the file in its final place; don't wait for commit
+    // Delete any file on unclean shutdown...
+  }
+}
+
+void StreamingFileCreation::commit(std::string& err)
+{
+  // Streaming files don't wait for a commit signal.
 }
 
 RuntimeHdfsWriteOperator::RuntimeHdfsWriteOperator(RuntimeOperator::Services& services, 
@@ -1511,10 +1639,9 @@ RuntimeHdfsWriteOperatorType::RuntimeHdfsWriteOperatorType(const std::string& op
 							   const RecordType * ty, 
 							   const std::string& hdfsHost, 
 							   int32_t port, 
-							   const std::string& hdfsFile,
 							   const std::string& header,
 							   const std::string& headerFile,
-							   const RecordTypeTransfer * argTransfer,
+							   FileCreationPolicy * creationPolicy,
 							   int32_t bufferSize, 
 							   int32_t replicationFactor, 
 							   int32_t blockSize)
@@ -1529,7 +1656,7 @@ RuntimeHdfsWriteOperatorType::RuntimeHdfsWriteOperatorType(const std::string& op
   mBlockSize(blockSize),
   mHeader(header),
   mHeaderFile(headerFile),
-  mCreationPolicy(new MultiFileCreationPolicy(hdfsFile, argTransfer))
+  mCreationPolicy(creationPolicy)
 {
 }
 

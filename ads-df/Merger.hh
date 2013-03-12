@@ -729,6 +729,7 @@ private:
   std::string mHeader;
   std::string mHeaderFile;
   RecordTypeTransfer * mFileNameExpr;
+  int32_t mMaxRecords;
 
   void buildHeader(bool isFormatHeader);
   void checkPath(PlanCheckContext& ctxt, const std::string& path);
