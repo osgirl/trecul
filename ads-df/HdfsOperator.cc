@@ -48,6 +48,7 @@
 typedef boost::shared_ptr<class HdfsFileSystem> HdfsFileSystemPtr;
 typedef boost::shared_ptr<class HdfsFileSystemImpl> HdfsFileSystemImplPtr;
 
+
 class HdfsFileSystemImpl
 {
 private:
@@ -387,6 +388,11 @@ bool HdfsFileSystem::removeAll(PathPtr p)
   return mImpl->removeAll(p);
 }
 
+bool HdfsFileSystem::remove(PathPtr p)
+{
+  return mImpl->remove(p);
+}
+
 void HdfsFileSystem::list(PathPtr p,
 			    std::vector<boost::shared_ptr<FileStatus> >& result)
 {
@@ -396,6 +402,13 @@ void HdfsFileSystem::list(PathPtr p,
 void HdfsFileSystem::readFile(UriPtr uri, std::string& out)
 {
   mImpl->readFile(uri, out);
+}
+
+bool HdfsFileSystem::rename(PathPtr from, PathPtr to)
+{
+  int32_t ret;
+  mImpl->rename(from, to, ret);
+  return ret == 0;
 }
 
 HdfsDelete::HdfsDelete(const std::string& path)
@@ -412,9 +425,94 @@ HdfsDelete::HdfsDelete(const std::string& path)
 HdfsDelete::~HdfsDelete()
 {
   if (mPath.size()) {
-    HdfsFileSystem fs (mPath);
-    fs.removeAll(Path::get(mPath));
+    PathPtr p = Path::get(mPath);
+    AutoFileSystem fs (p->getUri());
+    fs->removeAll(p);
   }
+}
+
+class HdfsWritableFile : public WritableFile
+{
+private:
+  HdfsFileSystemImplPtr mFileSystem;
+  hdfsFile mFile;
+public:
+  HdfsWritableFile(HdfsFileSystemImplPtr fileSystem,
+		   hdfsFile f);
+  ~HdfsWritableFile();
+  bool close();
+  bool flush();
+  int32_t write(const uint8_t * buf, std::size_t len);
+};
+
+HdfsWritableFile::HdfsWritableFile(HdfsFileSystemImplPtr fileSystem,
+				   hdfsFile f)
+  :
+  mFileSystem(fileSystem),
+  mFile(f)
+{
+}
+
+HdfsWritableFile::~HdfsWritableFile() 
+{
+  close();
+}
+
+bool HdfsWritableFile::close()
+{
+  int32_t ret = 0;
+  if (mFile != NULL) {
+    mFileSystem->close(mFile, ret);
+    mFile = NULL;
+  }
+  return ret == 0;
+}
+
+bool HdfsWritableFile::flush()
+{
+  mFileSystem->flush(mFile);
+  return true;
+}
+
+int32_t HdfsWritableFile::write(const uint8_t * buf, std::size_t len)
+{
+  return mFileSystem->write(mFile, buf, (int32_t) len);
+}
+
+HdfsWritableFileFactory::HdfsWritableFileFactory(UriPtr baseUri, 
+						 int32_t bufferSize,
+						 int32_t replicationFactor,
+						 int32_t blockSize)
+  :
+  mFileSystem(NULL),
+  mBufferSize(bufferSize),
+  mReplicationFactor(replicationFactor),
+  mBlockSize(blockSize)
+{
+  mFileSystem = (HdfsFileSystem *) HdfsFileSystemRegistrar::create(baseUri);
+}
+
+HdfsWritableFileFactory::~HdfsWritableFileFactory()
+{
+  delete mFileSystem;
+}
+
+HdfsFileSystem * HdfsWritableFileFactory::create(PathPtr p)
+{
+  return (HdfsFileSystem *) HdfsFileSystemRegistrar::create(p->getUri());
+}
+
+FileSystem * HdfsWritableFileFactory::getFileSystem()
+{
+  return mFileSystem;
+}
+
+WritableFile * HdfsWritableFileFactory::openForWrite(PathPtr p)
+{
+  hdfsFile f = mFileSystem->mImpl->open_for_write(p, mBufferSize, 
+						   mReplicationFactor, 
+						   mBlockSize);
+  return new HdfsWritableFile(mFileSystem->mImpl, f);
 }
 
 static bool canBeSplit(boost::shared_ptr<FileStatus> file)
@@ -819,7 +917,7 @@ public:
   HdfsFileCommitter();
   ~HdfsFileCommitter();
   void track (PathPtr from, PathPtr to,
-	      HdfsFileSystemImplPtr fileSystem);
+	      FileSystem * fileSystem);
   bool commit();
   const std::string& getError() const 
   {
@@ -837,11 +935,11 @@ class HdfsFileRename
 private:
   PathPtr mFrom;
   PathPtr mTo;
-  HdfsFileSystemImplPtr mFileSystem;
+  FileSystem * mFileSystem;
 public:
   HdfsFileRename(PathPtr from,
 		 PathPtr to,
-		 HdfsFileSystemImplPtr fileSystem);
+		 FileSystem * fileSystem);
   ~HdfsFileRename();
   bool prepare(std::string& err);
   void commit();
@@ -886,7 +984,7 @@ HdfsFileCommitter::~HdfsFileCommitter()
 
 void HdfsFileCommitter::track (PathPtr from, 
 			       PathPtr to,
-			       HdfsFileSystemImplPtr fileSystem)
+			       FileSystem * fileSystem)
 {
   mActions.push_back(boost::shared_ptr<HdfsFileRename>(new HdfsFileRename(from, to, fileSystem)));
 }
@@ -936,7 +1034,7 @@ bool HdfsFileRename::renameLessThan (boost::shared_ptr<HdfsFileRename> lhs,
 
 HdfsFileRename::HdfsFileRename(PathPtr from,
 			       PathPtr to,
-			       HdfsFileSystemImplPtr fileSystem)
+			       FileSystem * fileSystem)
   :
   mFrom(from),
   mTo(to),
@@ -959,9 +1057,7 @@ bool HdfsFileRename::prepare(std::string& err)
     std::cout << "HdfsFileRename::prepare renaming " << 
       (*mFrom) << " to " <<
       (*mTo) << std::endl;
-    int32_t ret;
-    mFileSystem->rename(mFrom, mTo, ret);
-    if (ret != 0) {
+    if (!mFileSystem->rename(mFrom, mTo)) {
       std::string msg = (boost::format("Failed to rename HDFS file %1% to %2%") %
 			 (*mFrom) % (*mTo)).str();
       std::cout << msg.c_str() << std::endl;
@@ -1051,14 +1147,18 @@ void HdfsFileRename::dispose()
 class OutputFile
 {
 public:
-  hdfsFile File;
+  WritableFile * File;
   ZLibCompress Compressor;
-  OutputFile(hdfsFile f) 
+  OutputFile(WritableFile * f) 
     :
     File(f)
   {
   }
-  void flush(HdfsFileSystemImplPtr fileSystem)
+  ~OutputFile()
+  {
+    close();
+  }
+  void flush()
   {
     // Flush data through the compressor.
     this->Compressor.put(NULL, 0, true);
@@ -1068,17 +1168,23 @@ public:
       std::size_t outputLen;
       this->Compressor.consumeOutput(output, outputLen);
       if (outputLen > 0) {
-	fileSystem->write(this->File, output, outputLen);
+	this->File->write(output, outputLen);
       } else {
 	break;
       }
     }    
     // Flush data to disk
-    fileSystem->flush(this->File);
+    this->File->flush();
   }
-  void close(HdfsFileSystemImplPtr fileSystem) {
-    // Clean close of file and file system
-    fileSystem->close(this->File);
+  bool close() {
+    // Clean close of file 
+    bool ret = true;
+    if (File != NULL) {
+      ret = File->close();
+      delete File;
+      File = NULL;
+    }
+    return ret;
   }
 };
 
@@ -1086,7 +1192,7 @@ class FileCreation
 {
 public:
   virtual ~FileCreation() {}
-  virtual void start(HdfsFileSystemImplPtr fileSystem, 
+  virtual void start(FileSystem * genericFileSystem,
 		     PathPtr rootUri,
 		     class RuntimeHdfsWriteOperator * fileFactory)=0;
   virtual OutputFile * onRecord(RecordBuffer input,
@@ -1105,7 +1211,7 @@ class MultiFileCreation : public FileCreation
 private:
   const MultiFileCreationPolicy& mPolicy;
   PathPtr mRootUri;
-  HdfsFileSystemImplPtr mFileSystem;
+  FileSystem * mGenericFileSystem;
   InterpreterContext * mRuntimeContext;
   std::map<std::string, OutputFile *> mFile;
   HdfsFileCommitter * mCommitter;
@@ -1121,7 +1227,7 @@ public:
   MultiFileCreation(const MultiFileCreationPolicy& policy, 
 		    int32_t partition);
   ~MultiFileCreation();
-  void start(HdfsFileSystemImplPtr fileSystem, PathPtr rootUri,
+  void start(FileSystem * genericFileSystem, PathPtr rootUri,
 	     class RuntimeHdfsWriteOperator * fileFactory);
   OutputFile * onRecord(RecordBuffer input,
 			class RuntimeHdfsWriteOperator * fileFactory);
@@ -1134,7 +1240,7 @@ class StreamingFileCreation : public FileCreation
 private:
   StreamingFileCreationPolicy mPolicy;
   PathPtr mRootUri;
-  HdfsFileSystemImplPtr mFileSystem;
+  FileSystem * mGenericFileSystem;
   std::size_t mNumRecords;
   OutputFile * mCurrentFile;
 
@@ -1143,7 +1249,7 @@ private:
 public:
   StreamingFileCreation(const StreamingFileCreationPolicy& policy);
   ~StreamingFileCreation();
-  void start(HdfsFileSystemImplPtr fileSystem, PathPtr rootUri,
+  void start(FileSystem * genericFileSystem, PathPtr rootUri,
 	     class RuntimeHdfsWriteOperator * fileFactory);
   OutputFile * onRecord(RecordBuffer input,
 			class RuntimeHdfsWriteOperator * fileFactory);
@@ -1160,7 +1266,6 @@ private:
   State mState;
 
   PathPtr mRootUri;
-  HdfsFileSystemImplPtr mFileSystem;
   RuntimePrinter mPrinter;
   AsyncWriter<RuntimeHdfsWriteOperator> mWriter;
   boost::thread * mWriterThread;
@@ -1234,6 +1339,7 @@ MultiFileCreation::MultiFileCreation(const MultiFileCreationPolicy& policy,
 				     int32_t partition)
   :
   mPolicy(policy),
+  mGenericFileSystem(NULL),
   mRuntimeContext(NULL),
   mCommitter(NULL),
   mPartition(partition)
@@ -1249,9 +1355,7 @@ MultiFileCreation::~MultiFileCreation()
 	end = mFile.end(); it != end; ++it) {
     if (it->second->File) {
       // Abnormal shutdown
-      int ret;
-      mFileSystem->close(it->second->File, ret);
-      it->second->File = NULL;
+      it->second->File->close();
     }
   }
 
@@ -1286,18 +1390,18 @@ OutputFile * MultiFileCreation::createFile(const std::string& filePath,
   }
   mCommitter->track(tempPath, 
 		    Path::get(mRootUri, permFile.str()), 
-		    mFileSystem);
+		    mGenericFileSystem);
   // Call back to the factory to actually create the file
   OutputFile * of = factory->createFile(tempPath);
   add(filePath, of);
   return of;
 }
 
-void MultiFileCreation::start(HdfsFileSystemImplPtr fileSystem, 
+void MultiFileCreation::start(FileSystem * genericFileSystem,
 			      PathPtr rootUri,
 			      RuntimeHdfsWriteOperator * factory)
 {
-  mFileSystem = fileSystem;
+  mGenericFileSystem = genericFileSystem;
   mRootUri = rootUri;
   // If statically defined path, create and open file here.
   if (0 != mPolicy.mHdfsFile.size()) {
@@ -1331,9 +1435,9 @@ void MultiFileCreation::close(bool flush)
 	end = mFile.end(); it != end; ++it) {
     if (it->second->File != NULL) {
       if (flush) {
-	it->second->flush(mFileSystem);
+	it->second->flush();
       }
-      it->second->close(mFileSystem);
+      it->second->close();
       it->second->File = NULL;
     }
   }
@@ -1373,6 +1477,7 @@ FileCreation * StreamingFileCreationPolicy::create(int32_t partition) const
 StreamingFileCreation::StreamingFileCreation(const StreamingFileCreationPolicy& policy)
   :
   mPolicy(policy),
+  mGenericFileSystem(NULL),
   mNumRecords(0),
   mCurrentFile(NULL)
 {
@@ -1404,11 +1509,11 @@ OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
   return mCurrentFile;
 }
 
-void StreamingFileCreation::start(HdfsFileSystemImplPtr fileSystem, 
+void StreamingFileCreation::start(FileSystem * genericFileSystem,
 				  PathPtr rootUri,
 				  RuntimeHdfsWriteOperator * factory)
 {
-  mFileSystem = fileSystem;
+  mGenericFileSystem = genericFileSystem;
   mRootUri = rootUri;
   createFile(mPolicy.mBaseDir, factory);
 }
@@ -1429,9 +1534,9 @@ void StreamingFileCreation::close(bool flush)
 {
   if (mCurrentFile != NULL) {
     if (flush) {
-      mCurrentFile->flush(mFileSystem);
+      mCurrentFile->flush();
     }
-    mCurrentFile->close(mFileSystem);
+    mCurrentFile->close();
     delete mCurrentFile;
     mCurrentFile = NULL;
     // TODO: Put the file in its final place; don't wait for commit
@@ -1467,24 +1572,13 @@ RuntimeHdfsWriteOperator::~RuntimeHdfsWriteOperator()
     HdfsFileCommitter::release(mCommitter);
     mCommitter = NULL;
   }
-  if (mFileSystem) {
-    // Since we are not calling hdfsConnectNewInstance
-    // we are sharing references to the same underlying
-    // Java class instance.  Explicitly closing will
-    // mess up other instances floating around.
-    // hdfsDisconnect(mFileSystem);
-    mFileSystem = HdfsFileSystemImplPtr();
-  }
 }
 
 OutputFile * RuntimeHdfsWriteOperator::createFile(PathPtr filePath)
 {
   // TODO: Check if file exists
   // TODO: Make sure file is cleaned up in case of failure.
-  hdfsFile f = mFileSystem->open_for_write(filePath,
-					   getMyOperatorType().mBufferSize,
-					   getMyOperatorType().mReplicationFactor,
-					   /*getMyOperatorType().mBlockSize*/2000000000);
+  WritableFile * f = getMyOperatorType().mFileFactory->openForWrite(filePath);
   OutputFile * of = new OutputFile(f);
   if (hasInlineHeader()) {
     // We write in-file header for every partition
@@ -1495,7 +1589,7 @@ OutputFile * RuntimeHdfsWriteOperator::createFile(PathPtr filePath)
       uint8_t * output;
       std::size_t outputLen;
       of->Compressor.consumeOutput(output, outputLen);
-      mFileSystem->write(of->File, output, outputLen);
+      of->File->write(output, outputLen);
     }
   } 
   return of;
@@ -1503,15 +1597,9 @@ OutputFile * RuntimeHdfsWriteOperator::createFile(PathPtr filePath)
 
 void RuntimeHdfsWriteOperator::start()
 {
-  // Connect to the file system
-  // TODO: Convert write operator to use a URI
-  std::string uriStr = (boost::format("hdfs://%1%:%2%/") %
-			getMyOperatorType().mHdfsHost %
-			getMyOperatorType().mHdfsPort).str();
-  mRootUri = Path::get(uriStr);
-  mFileSystem = HdfsFileSystemImpl::get(mRootUri->getUri());
-  
-  mCreationPolicy->start(mFileSystem, mRootUri, this);
+  WritableFileFactory * ff = getMyOperatorType().mFileFactory;
+  mRootUri = ff->getFileSystem()->getRoot();
+  mCreationPolicy->start(ff->getFileSystem(), mRootUri, this);
 
   if (hasHeaderFile()) {
     PathPtr headerPath = Path::get(getMyOperatorType().mHeaderFile);
@@ -1521,19 +1609,16 @@ void RuntimeHdfsWriteOperator::start()
     if (mCommitter == NULL) {
       mCommitter = HdfsFileCommitter::get();
     }
-    mCommitter->track(tmpHeaderPath, headerPath, mFileSystem);
-    hdfsFile headerFile = 
-      mFileSystem->open_for_write(tmpHeaderPath,
-				  getMyOperatorType().mBufferSize,
-				  getMyOperatorType().mReplicationFactor,
-				  getMyOperatorType().mBlockSize);
+    mCommitter->track(tmpHeaderPath, headerPath, 
+		      getMyOperatorType().mFileFactory->getFileSystem());
+    WritableFile * headerFile = ff->openForWrite(tmpHeaderPath);
     if (headerFile == NULL) {
       throw std::runtime_error("Couldn't create header file");
     }
-    mFileSystem->write(headerFile, 
-		       &getMyOperatorType().mHeader[0], 
-		       (tSize) getMyOperatorType().mHeader.size());
-    mFileSystem->close(headerFile);
+    headerFile->write((const uint8_t *) &getMyOperatorType().mHeader[0], 
+		      getMyOperatorType().mHeader.size());
+    headerFile->close();
+    delete headerFile;
   }
   // Start a thread that will write
   // mWriterThread = 
@@ -1553,12 +1638,6 @@ void RuntimeHdfsWriteOperator::renameTempFile()
       mError = mCommitter->getError();
     } 
   }
-  // Since we are not calling hdfsConnectNewInstance
-  // we are sharing references to the same underlying
-  // Java class instance.  Explicitly closing will
-  // mess up other instances floating around.
-  // hdfsDisconnect(mFileSystem);
-  mFileSystem = HdfsFileSystemImplPtr();
 }
 
 void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
@@ -1572,7 +1651,7 @@ void RuntimeHdfsWriteOperator::writeToHdfs(RecordBuffer input, bool isEOS)
       uint8_t * output;
       std::size_t outputLen;
       of->Compressor.consumeOutput(output, outputLen);
-      mFileSystem->write(of->File, output, outputLen);
+      of->File->write(output, outputLen);
     }
     mPrinter.clear();
   } else {
@@ -1622,38 +1701,22 @@ void RuntimeHdfsWriteOperator::onEvent(RuntimePort * port)
 void RuntimeHdfsWriteOperator::shutdown()
 {
   mCreationPolicy->close(false);
-  if (mFileSystem) {
-    // Since we are not calling hdfsConnectNewInstance
-    // we are sharing references to the same underlying
-    // Java class instance.  Explicitly closing will
-    // mess up other instances floating around.
-    // hdfsDisconnect(mFileSystem);
-    mFileSystem = HdfsFileSystemImplPtr();
-  }
   if (mError.size() != 0) {
     throw std::runtime_error(mError);
   }
 }
 
 RuntimeHdfsWriteOperatorType::RuntimeHdfsWriteOperatorType(const std::string& opName,
-							   const RecordType * ty, 
-							   const std::string& hdfsHost, 
-							   int32_t port, 
+							   const RecordType * ty,
+							   WritableFileFactory * fileFactory,
 							   const std::string& header,
 							   const std::string& headerFile,
-							   FileCreationPolicy * creationPolicy,
-							   int32_t bufferSize, 
-							   int32_t replicationFactor, 
-							   int32_t blockSize)
+							   FileCreationPolicy * creationPolicy)
   :
   RuntimeOperatorType(opName.c_str()),
   mPrint(ty->getPrint()),
   mFree(ty->getFree()),
-  mHdfsHost(hdfsHost),
-  mHdfsPort(port),
-  mBufferSize(bufferSize),
-  mReplicationFactor(replicationFactor),
-  mBlockSize(blockSize),
+  mFileFactory(fileFactory),
   mHeader(header),
   mHeaderFile(headerFile),
   mCreationPolicy(creationPolicy)
@@ -1662,6 +1725,7 @@ RuntimeHdfsWriteOperatorType::RuntimeHdfsWriteOperatorType(const std::string& op
 
 RuntimeHdfsWriteOperatorType::~RuntimeHdfsWriteOperatorType()
 {
+  delete mFileFactory;
   delete mCreationPolicy;
 }
 

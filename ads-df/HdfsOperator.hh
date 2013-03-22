@@ -63,6 +63,7 @@ public:
 
 class HdfsFileSystem : public FileSystem
 {
+  friend class HdfsWritableFileFactory;
 private:
   // Use pimpl idiom to hide HDFS interface.
   boost::shared_ptr<class HdfsFileSystemImpl> mImpl;
@@ -102,6 +103,11 @@ public:
   virtual bool removeAll(PathPtr p);
 
   /**
+   * Remove a file.
+   */
+  virtual bool remove(PathPtr p);
+
+  /**
    * Get a directory listing of a path that isDirectory.
    */
   virtual void list(PathPtr p,
@@ -111,6 +117,11 @@ public:
    * Read the contents of a file into a std::string.
    */
   virtual void readFile(UriPtr uri, std::string& out);
+
+  /**
+   * Get information about a path.
+   */
+  virtual bool rename(PathPtr from, PathPtr to);
 };
 
 class hdfs_file_traits
@@ -126,6 +137,57 @@ public:
   static void close(file_type f);
   static int32_t read(file_type f, uint8_t * buf, int32_t bufSize);
   static bool isEOF(file_type f);
+};
+
+class HdfsWritableFileFactory : public WritableFileFactory
+{
+private:
+  HdfsFileSystem * mFileSystem;
+  int32_t mBufferSize;
+  int32_t mReplicationFactor;
+  int32_t mBlockSize;
+
+  HdfsWritableFileFactory()
+    :
+    mFileSystem(NULL),
+    mBufferSize(0),
+    mReplicationFactor(0),
+    mBlockSize(0)
+  {
+  }
+
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void save(Archive & ar, const unsigned int version) const
+  {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(WritableFileFactory);
+    ar & BOOST_SERIALIZATION_NVP(mBufferSize);
+    ar & BOOST_SERIALIZATION_NVP(mReplicationFactor);
+    ar & BOOST_SERIALIZATION_NVP(mBlockSize);
+    PathPtr fileSystemPath = mFileSystem->getRoot();    
+    ar & BOOST_SERIALIZATION_NVP(fileSystemPath);
+  }
+  template <class Archive>
+  void load(Archive & ar, const unsigned int version) 
+  {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(WritableFileFactory);
+    ar & BOOST_SERIALIZATION_NVP(mBufferSize);
+    ar & BOOST_SERIALIZATION_NVP(mReplicationFactor);
+    ar & BOOST_SERIALIZATION_NVP(mBlockSize);
+    PathPtr fileSystemPath;
+    ar & BOOST_SERIALIZATION_NVP(fileSystemPath);
+    mFileSystem = create(fileSystemPath);
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
+
+  static HdfsFileSystem * create(PathPtr p);
+public:
+  HdfsWritableFileFactory(UriPtr baseUri, int32_t bufferSize=0,
+			  int32_t replicationFactor=0, int32_t blockSize=0);
+  ~HdfsWritableFileFactory();
+  FileSystem * getFileSystem();
+  WritableFile * openForWrite(PathPtr p);
 };
 
 class FileCreationPolicy
@@ -225,11 +287,7 @@ class RuntimeHdfsWriteOperatorType : public RuntimeOperatorType
 private:
   RecordTypePrint mPrint;
   RecordTypeFree mFree;
-  std::string mHdfsHost;
-  int32_t mHdfsPort;
-  int32_t mBufferSize;
-  int32_t mReplicationFactor;
-  int32_t mBlockSize;
+  WritableFileFactory * mFileFactory;
   std::string mHeader;
   std::string mHeaderFile;
   FileCreationPolicy * mCreationPolicy;
@@ -242,31 +300,24 @@ private:
     ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(RuntimeOperatorType);
     ar & BOOST_SERIALIZATION_NVP(mPrint);
     ar & BOOST_SERIALIZATION_NVP(mFree);
-    ar & BOOST_SERIALIZATION_NVP(mHdfsHost);
-    ar & BOOST_SERIALIZATION_NVP(mHdfsPort);
-    ar & BOOST_SERIALIZATION_NVP(mBufferSize);
-    ar & BOOST_SERIALIZATION_NVP(mReplicationFactor);
-    ar & BOOST_SERIALIZATION_NVP(mBlockSize);
+    ar & BOOST_SERIALIZATION_NVP(mFileFactory);
     ar & BOOST_SERIALIZATION_NVP(mHeader);
     ar & BOOST_SERIALIZATION_NVP(mHeaderFile);
     ar & BOOST_SERIALIZATION_NVP(mCreationPolicy);
   }
   RuntimeHdfsWriteOperatorType()
     :
+    mFileFactory(NULL),
     mCreationPolicy(NULL)
   {
   }
 public:
   RuntimeHdfsWriteOperatorType(const std::string& opName,
 			       const RecordType * ty, 
-			       const std::string& hdfsHost, 
-			       int32_t port, 
+			       WritableFileFactory * fileFactory,
 			       const std::string& header,
 			       const std::string& headerFile,
-			       FileCreationPolicy * creationPolicy,
-			       int32_t bufferSize=0, 
-			       int32_t replicationFactor=0, 
-			       int32_t blockSize=0);
+			       FileCreationPolicy * creationPolicy);
   ~RuntimeHdfsWriteOperatorType();
   RuntimeOperator * create(RuntimeOperator::Services& services) const;
 };

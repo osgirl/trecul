@@ -32,6 +32,9 @@
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -331,17 +334,23 @@ std::string FileSystem::getTempFileName()
   return base16_encode((const uint8_t *) &tmp, tmp.size());
 }
 
-class LocalFileSystemImpl
+class LocalFileSystemImpl : public FileSystem
 {
 private:
   PathPtr mRoot;
   boost::shared_ptr<FileStatus> createFileStatus(const boost::filesystem::path & fsPath);
+
+  void checkPath(PathPtr p);
 public:
   LocalFileSystemImpl();
   LocalFileSystemImpl(const char * root);
   LocalFileSystemImpl(UriPtr uri);
   ~LocalFileSystemImpl();
   
+  void expand(std::string pattern,
+	      int32_t numPartitions,
+	      std::vector<std::vector<boost::shared_ptr<FileChunk> > >& files);
+
   /**
    * Get the root of the file system.
    * Should this be a URI or a PathPtr?
@@ -359,6 +368,16 @@ public:
   bool exists(PathPtr p);
 
   /**
+   * Delete a file.
+   */
+  bool remove(PathPtr p);
+
+  /**
+   * Recursively delete a path
+   */
+  bool removeAll(PathPtr p);
+
+  /**
    * Get a directory listing of a path that isDirectory.
    */
   void list(PathPtr p,
@@ -368,6 +387,12 @@ public:
    * Read the contents of a file into a std::string.
    */
   void readFile(UriPtr uri, std::string& out);
+
+  /**
+   * Get information about a path.
+   */
+  bool rename(PathPtr from, PathPtr to);
+
 };
 
 LocalFileSystemImpl::LocalFileSystemImpl()
@@ -395,6 +420,14 @@ LocalFileSystemImpl::~LocalFileSystemImpl()
 PathPtr LocalFileSystemImpl::getRoot()
 {
   return mRoot;
+}
+
+void LocalFileSystemImpl::checkPath(PathPtr p) 
+{
+  // Validate that this is a file URI.
+  if (!boost::algorithm::iequals("file", p->getUri()->getScheme()))
+    throw std::runtime_error((boost::format("Invalid URI used with local file system: %1%") %
+			      p->toString()).str());
 }
 
 boost::shared_ptr<FileStatus> LocalFileSystemImpl::createFileStatus(const boost::filesystem::path & fsPath)
@@ -425,20 +458,29 @@ boost::shared_ptr<FileStatus> LocalFileSystemImpl::getStatus(PathPtr p)
 
 bool LocalFileSystemImpl::exists(PathPtr p)
 {
-  // Validate that this is a file URI.
-  if (!boost::algorithm::iequals("file", p->getUri()->getScheme()))
-    throw std::runtime_error((boost::format("Invalid URI used with local file system: %1%") %
-			      p->toString()).str());
+  checkPath(p);
   boost::filesystem::path fsPath(p->getUri()->getPath());
   return boost::filesystem::exists(fsPath);
+}
+
+bool LocalFileSystemImpl::removeAll(PathPtr p)
+{
+  checkPath(p);
+  boost::filesystem::path fsPath(p->getUri()->getPath());
+  return boost::filesystem::remove_all(fsPath);
+}
+
+bool LocalFileSystemImpl::remove(PathPtr p)
+{
+  checkPath(p);
+  boost::filesystem::path fsPath(p->getUri()->getPath());
+  return boost::filesystem::remove(fsPath);
 }
 
 void LocalFileSystemImpl::list(PathPtr p,
 			  std::vector<boost::shared_ptr<FileStatus> >& result)
 {
-  if (!boost::algorithm::iequals("file", p->getUri()->getScheme()))
-    throw std::runtime_error((boost::format("Invalid URI used with local file system: %1%") %
-			      p->toString()).str());
+  checkPath(p);
   boost::filesystem::path fsPath(p->getUri()->getPath());
   boost::filesystem::directory_iterator end;
   for(boost::filesystem::directory_iterator it(fsPath);
@@ -458,55 +500,21 @@ void LocalFileSystemImpl::readFile(UriPtr uri, std::string& out)
   out = sstr.str();
 }
 
-// Class to register the LocalFileSystem class.
-// Yes, there could be a template here but it
-// would require a template indirection to 
-// pass the string as a template arg.  A little
-// cut and paste doesn't seem so bad by comparison.
-class LocalFileSystemRegistrar
+bool LocalFileSystemImpl::rename(PathPtr from, PathPtr to)
 {
-public:
-  LocalFileSystemRegistrar();
-  static FileSystem * create(UriPtr uri);
-};
-
-LocalFileSystemRegistrar::LocalFileSystemRegistrar()
-{
-  FileSystemFactory & factory(FileSystemFactory::get());
-  factory.registerCreator("file", &create);
+  checkPath(from);
+  checkPath(to);
+  boost::filesystem::path fromPath(from->getUri()->getPath());
+  boost::filesystem::path toPath(to->getUri()->getPath());
+  if (boost::filesystem::exists(toPath)) {
+    // TODO: Resolve race condition since we are trying to
+    // implement semantics consistent with HDFS over a Posix file
+    // system that deletes a target if it exists.
+    return false;
+  }
+  boost::filesystem::rename(fromPath, toPath);
 }
 
-FileSystem * LocalFileSystemRegistrar::create(UriPtr uri)
-{
-  return new LocalFileSystem2(uri);
-}
-
-// Static to register file system
-static LocalFileSystemRegistrar registrar;
-
-LocalFileSystem2::LocalFileSystem2()
-  :
-  mImpl(new LocalFileSystemImpl())
-{
-}
-
-LocalFileSystem2::LocalFileSystem2(const char * root)
-  :
-  mImpl(new LocalFileSystemImpl(root))
-{
-}
-
-LocalFileSystem2::LocalFileSystem2(UriPtr uri)
-  :
-  mImpl(new LocalFileSystemImpl(uri))
-{
-}
-
-LocalFileSystem2::~LocalFileSystem2()
-{
-  delete mImpl;
-}
-  
 static bool canBeSplit(const std::string& file)
 {
   // Gzip compressed files cannot be split.  Others can.
@@ -527,7 +535,7 @@ public:
   }
 };
 
-void LocalFileSystem2::expand(std::string pattern,
+void LocalFileSystemImpl::expand(std::string pattern,
 			      int32_t numPartitions,
 			      std::vector<std::vector<boost::shared_ptr<FileChunk> > >& files)
 {
@@ -620,30 +628,117 @@ void LocalFileSystem2::expand(std::string pattern,
   }
 }
 
-PathPtr LocalFileSystem2::getRoot()
+// Class to register the LocalFileSystem class.
+// Yes, there could be a template here but it
+// would require a template indirection to 
+// pass the string as a template arg.  A little
+// cut and paste doesn't seem so bad by comparison.
+class LocalFileSystemRegistrar
 {
-  return mImpl->getRoot();
+public:
+  LocalFileSystemRegistrar();
+  static FileSystem * create(UriPtr uri);
+};
+
+LocalFileSystemRegistrar::LocalFileSystemRegistrar()
+{
+  FileSystemFactory & factory(FileSystemFactory::get());
+  factory.registerCreator("file", &create);
 }
 
-boost::shared_ptr<FileStatus> LocalFileSystem2::getStatus(PathPtr p)
+FileSystem * LocalFileSystemRegistrar::create(UriPtr uri)
 {
-  return mImpl->getStatus(p);
+  return new LocalFileSystemImpl(uri);
 }
 
-bool LocalFileSystem2::exists(PathPtr p)
+// Static to register file system
+static LocalFileSystemRegistrar registrar;
+
+class LocalWritableFile : public WritableFile
 {
-  return mImpl->exists(p);
+private:
+  int mFile;
+public:
+  LocalWritableFile(int fd);
+  ~LocalWritableFile();
+  bool close();
+  bool flush();
+  int32_t write(const uint8_t * buf, std::size_t len);  
+};
+
+LocalWritableFile::LocalWritableFile(int fd)
+{
 }
 
-void LocalFileSystem2::list(PathPtr p,
-			    std::vector<boost::shared_ptr<FileStatus> >& result)
+LocalWritableFile::~LocalWritableFile()
 {
-  mImpl->list(p, result);
-} 
+}
 
-void LocalFileSystem2::readFile(UriPtr uri, std::string& out)
+bool LocalWritableFile::close()
 {
-  mImpl->readFile(uri, out);
+}
+
+bool LocalWritableFile::flush()
+{
+}
+
+int32_t LocalWritableFile::write(const uint8_t * buf, std::size_t len)
+{
+  for(;;) {
+    ssize_t ret = ::write(mFile, buf, len);
+    if (ret < 0) {
+      if (errno == EINTR)
+	continue;
+      // TODO: Not good enough. Must try to recover!
+      throw errno;
+    }
+    return (int32_t) ret;
+  }
+}
+
+LocalWritableFileFactory::LocalWritableFileFactory()
+  :
+  mFileSystem(NULL)
+{
+}
+
+LocalWritableFileFactory::LocalWritableFileFactory(UriPtr baseUri)
+  :
+  mFileSystem(NULL)
+{
+  mFileSystem = (LocalFileSystemImpl *) LocalFileSystemRegistrar::create(baseUri);
+}
+
+LocalWritableFileFactory::~LocalWritableFileFactory()
+{
+  delete mFileSystem;
+}
+
+PathPtr LocalWritableFileFactory::getRootPath() const
+{
+  return mFileSystem != NULL ? mFileSystem->getRoot() : PathPtr();
+}
+
+LocalFileSystemImpl * LocalWritableFileFactory::create(PathPtr p)
+{
+  return (LocalFileSystemImpl *) LocalFileSystemRegistrar::create(p->getUri());
+}
+
+FileSystem * LocalWritableFileFactory::getFileSystem()
+{
+  return mFileSystem;
+}
+
+WritableFile * LocalWritableFileFactory::openForWrite(PathPtr p)
+{
+  const char * filename = p->getUri()->getPath().c_str();
+  int f = ::open(filename,
+		 O_WRONLY|O_CREAT|O_TRUNC,
+		 S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP);
+  if (f == -1) {
+    throw std::runtime_error((boost::format("Couldn't create file: %1%") % filename).str());
+  }
+  return new LocalWritableFile(f);
 }
 
 SerialOrganizedTable::SerialOrganizedTable()

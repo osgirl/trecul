@@ -260,6 +260,16 @@ public:
   virtual bool exists(PathPtr p) =0;
 
   /**
+   * Recursively delete a path.
+   */
+  virtual bool removeAll(PathPtr p) =0;
+
+  /**
+   * Remove a file.
+   */
+  virtual bool remove(PathPtr p) =0;
+
+  /**
    * Get a directory listing of a path that isDirectory.
    */
   virtual void list(PathPtr p,
@@ -269,6 +279,15 @@ public:
    * Read the contents of a file into a std::string.
    */
   virtual void readFile(UriPtr uri, std::string& out) =0;
+
+  /**
+   * Rename a file from/to
+   */
+  virtual bool rename(PathPtr from, PathPtr to) =0;
+
+  /**
+   * Open a file for writing
+   */
 };
 
 /**
@@ -296,50 +315,83 @@ public:
   }
 };
 
-class LocalFileSystem2 : public FileSystem
+/**
+ * A writable object.  
+ * Due to the virtual function overhead here this object
+ * should be treated as non-buffered and should only be used
+ * from largish writes.  Implementations are encouraged to
+ * make this assumption and do whatever it takes to deliver
+ * performance.
+ * TODO: Async interface?  At this point I only intend this to
+ * live over file IO which probably will remain sync with a thread
+ * pool based async layer over it.
+ */ 
+class WritableFile
+{
+public:
+  virtual ~WritableFile() {}
+  virtual bool close() =0;
+  virtual bool flush() =0;
+  virtual int32_t write(const uint8_t * buf, std::size_t len) =0;
+};
+
+/**
+ * Different file systems may have different file construction
+ * interfaces thus we do something kind of wierd and create a
+ * factory object that encapsulates a file system that can also
+ * encapsulate the file creation policy.
+ * An extra trick is that since this encapsulates a policy it must
+ * also be serializable.
+ * TODO: It would be nice to settle on more least common denominator
+ * creation parameters to avoid a potential proliferation of instances
+ * of these objects just because they are encapsulating different creation
+ * parameters.
+ */
+class WritableFileFactory
 {
 private:
-  class LocalFileSystemImpl * mImpl;
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive & ar, const unsigned int version)
+  {
+  }
 public:
-  LocalFileSystem2();
-  LocalFileSystem2(const char * root);
-  LocalFileSystem2(UriPtr uri);
-  ~LocalFileSystem2();
+  virtual ~WritableFileFactory() {}
+  virtual FileSystem * getFileSystem() =0;
+  virtual WritableFile * openForWrite(PathPtr p) =0;
+};
 
-  /**
-   * Glob a file and try to distribute the results 
-   * evently among numPartitions partitions.
-   */
-  void expand(std::string pattern,
-	      int32_t numPartitions,
-	      std::vector<std::vector<boost::shared_ptr<FileChunk> > >& files);
-	        
-  /**
-   * Get the root of the file system.
-   * Should this be a URI or a PathPtr?
-   */
-  PathPtr getRoot();
+class LocalWritableFileFactory : public WritableFileFactory
+{
+private:
+  class LocalFileSystemImpl * mFileSystem;
+  // Serialization
+  friend class boost::serialization::access;
+  template <class Archive>
+  void save(Archive & ar, const unsigned int version) const
+  {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(WritableFileFactory);
+    PathPtr fileSystemPath = getRootPath();
+    ar & BOOST_SERIALIZATION_NVP(fileSystemPath);
+  }
+  template <class Archive>
+  void load(Archive & ar, const unsigned int version) 
+  {
+    ar & BOOST_SERIALIZATION_BASE_OBJECT_NVP(WritableFileFactory);
+    PathPtr fileSystemPath;
+    ar & BOOST_SERIALIZATION_NVP(fileSystemPath);
+    mFileSystem = create(fileSystemPath);
+  }
+  BOOST_SERIALIZATION_SPLIT_MEMBER()
 
-  /**
-   * Get information about a path.
-   */
-  virtual boost::shared_ptr<FileStatus> getStatus(PathPtr p);
-
-  /**
-   * Does the path exist
-   */
-  virtual bool exists(PathPtr p);
-
-  /**
-   * Get a directory listing of a path that isDirectory.
-   */
-  virtual void list(PathPtr p,
-		    std::vector<boost::shared_ptr<FileStatus> >& result);
-
-  /**
-   * Read the contents of a file into a std::string.
-   */
-  virtual void readFile(UriPtr uri, std::string& out);
+  PathPtr getRootPath() const;
+  static LocalFileSystemImpl * create(PathPtr p);
+  LocalWritableFileFactory();
+public:
+  LocalWritableFileFactory(UriPtr baseUri);
+  ~LocalWritableFileFactory();
+  FileSystem * getFileSystem();
+  WritableFile * openForWrite(PathPtr p);
 };
 
 /**

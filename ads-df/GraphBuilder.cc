@@ -66,6 +66,9 @@
 // non polymorphic classes.
 BOOST_CLASS_EXPORT(FileCreationPolicy);
 BOOST_CLASS_EXPORT(MultiFileCreationPolicy);
+BOOST_CLASS_EXPORT(WritableFileFactory);
+BOOST_CLASS_EXPORT(HdfsWritableFileFactory);
+BOOST_CLASS_EXPORT(LocalWritableFileFactory);
 BOOST_CLASS_EXPORT(AssignedOperatorType);
 BOOST_CLASS_EXPORT(ConstrainedOperatorType);
 BOOST_CLASS_EXPORT(RuntimeOperatorType);
