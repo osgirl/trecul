@@ -1181,7 +1181,46 @@ RecordTypeCopy::RecordTypeCopy(const RecordType * source,
   MemcpyOp::coalesce(fieldOps, mMemcpy);
 }
 
-void TaggedFieldAddress::print(RecordBuffer buf, std::ostream& ostr) const
+void TaggedFieldAddress::printEscaped(const char * begin, int32_t sz, 
+				      char escapeChar, std::ostream& ostr)
+{
+  if (escapeChar != 0) {
+    const char * it = begin;
+    const char * end = begin + sz;
+    for(; it!=end; it++) {
+      switch(*it) {
+      case '\n':
+	ostr << escapeChar << 'n';
+	break;
+      case '\b':
+	ostr << escapeChar << 'b';
+	break;
+      case '\f':
+	ostr << escapeChar << 'f';
+	break;
+      case '\t':
+	ostr << escapeChar << 't';
+	break;
+      case '\r':
+	ostr << escapeChar << 'r';
+	break;
+      case '\\':
+	ostr << escapeChar << '\\';
+	break;
+      default:
+	ostr << *it;
+	break;
+      }
+    }
+  } else {
+    // Raw output
+    ostr << begin;
+  }
+}
+
+void TaggedFieldAddress::print(RecordBuffer buf, 
+			       char escapeChar,
+			       std::ostream& ostr) const
 {
   // Handle NULLs 
   if (mAddress.isNull(buf)) {
@@ -1191,10 +1230,19 @@ void TaggedFieldAddress::print(RecordBuffer buf, std::ostream& ostr) const
 
   switch(mTag) {
   case FieldType::VARCHAR:
-    ostr << mAddress.getVarcharPtr(buf)->c_str();
+    {
+      const char * begin = mAddress.getVarcharPtr(buf)->c_str();
+      int32_t sz = mAddress.getVarcharPtr(buf)->size();
+      printEscaped(begin, sz, escapeChar, ostr);
+    }
     break;
   case FieldType::CHAR:
-    ostr << mAddress.getCharPtr(buf);
+    {
+      const char * begin = mAddress.getCharPtr(buf);
+      // TODO: Pad to static length
+      int32_t sz = ::strlen(begin);
+      printEscaped(begin, sz, escapeChar, ostr);
+    }
     break;
   case FieldType::BIGDECIMAL:
     {
@@ -1231,11 +1279,29 @@ void TaggedFieldAddress::print(RecordBuffer buf, std::ostream& ostr) const
 
 RecordTypePrint::RecordTypePrint(const std::vector<TaggedFieldAddress>& fields)
   :
-  mFields(fields)
+  mFields(fields),
+  mFieldDelimiter('\t'),
+  mRecordDelimiter('\n'),
+  mEscapeChar('\\')
+{
+}
+
+RecordTypePrint::RecordTypePrint(const std::vector<TaggedFieldAddress>& fields,
+				 char fieldDelimiter, char recordDelimiter,
+				 char escapeChar)
+  :
+  mFields(fields),
+  mFieldDelimiter(fieldDelimiter),
+  mRecordDelimiter(recordDelimiter),
+  mEscapeChar(escapeChar)
 {
 }
 
 RecordTypePrint::RecordTypePrint()
+  :
+  mFieldDelimiter('\t'),
+  mRecordDelimiter('\n'),
+  mEscapeChar('\\')
 {
 }
 
@@ -1259,11 +1325,11 @@ void RecordTypePrint::print(RecordBuffer buf, std::ostream& ostr, bool emitNewLi
   for(std::vector<TaggedFieldAddress>::const_iterator it = mFields.begin();
       it != mFields.end();
       ++it) {
-    if (mFields.begin() != it) ostr << "\t";
-    it->print(buf, ostr);    
+    if (mFields.begin() != it) ostr << mFieldDelimiter;
+    it->print(buf, mEscapeChar, ostr);    
   }
   if (emitNewLine)
-    ostr << "\n";
+    ostr << mRecordDelimiter;
 }
 
 RecordTypeSerialize::RecordTypeSerialize()

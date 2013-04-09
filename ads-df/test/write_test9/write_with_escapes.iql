@@ -1,0 +1,5 @@
+g = generate[output="RECORDCOUNT AS a, CASE WHEN RECORDCOUNT%4 = 1 THEN 'no escape chars' ELSE 'has new
+line' END AS b, CASE WHEN RECORDCOUNT%4 = 3 THEN 'no escape chars either' ELSE 'has	tab' END AS c", numRecords=25];
+w = write[file="output.txt", mode="text"];
+
+g -> w;

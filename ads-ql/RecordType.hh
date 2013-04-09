@@ -955,6 +955,9 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mTag);
   }
 
+  static void printEscaped(const char * begin, int32_t sz, 
+			   char escapeChar, std::ostream& ostr);
+
 public:
   TaggedFieldAddress()
     :
@@ -968,26 +971,39 @@ public:
     mTag(tag)
   {
   }
-  void print(RecordBuffer buf, std::ostream& ostr) const;
+  void print(RecordBuffer buf, char escapeChar, std::ostream& ostr) const;
 };
 
 class RecordTypePrint
 {
 private:
   std::vector<TaggedFieldAddress> mFields;
+  char mFieldDelimiter;
+  char mRecordDelimiter;
+  char mEscapeChar;
+
   // Serialization
   friend class boost::serialization::access;
   template <class Archive>
   void serialize(Archive & ar, const unsigned int version)
   {
     ar & BOOST_SERIALIZATION_NVP(mFields);
+    ar & BOOST_SERIALIZATION_NVP(mFieldDelimiter);
+    ar & BOOST_SERIALIZATION_NVP(mRecordDelimiter);
+    ar & BOOST_SERIALIZATION_NVP(mEscapeChar);
   }
 public:
   RecordTypePrint();
   RecordTypePrint(const std::vector<TaggedFieldAddress>& fields);
+  RecordTypePrint(const std::vector<TaggedFieldAddress>& fields,
+		  char fieldDelimter, char recordDelimiter, 
+		  char escapeChar);
   RecordTypePrint(const TaggedFieldAddress& field)
     :
-    mFields(1, field)
+    mFields(1, field),
+    mFieldDelimiter('\t'),
+    mRecordDelimiter('\n'),
+    mEscapeChar('\\')
   {
   }
   ~RecordTypePrint();
