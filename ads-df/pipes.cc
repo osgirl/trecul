@@ -340,6 +340,7 @@ public:
       static const char * taskPartitionProperty = "mapreduce.task.partition";
       const std::string& strTaskPartition(context.getJobConf()->get(taskPartitionProperty));
       partition = boost::lexical_cast<int32_t>(strTaskPartition);    
+      std::cout << "Processing file: " << filename.c_str() << std::endl;
     } else {
       // Filename is an HDFS URI.  The file will have underscore delimited
       // structure and the trailing component is a 5 digit number (padded
