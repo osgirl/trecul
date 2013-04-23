@@ -830,8 +830,8 @@ void SerialOrganizedTable::bindComponent(FileSystem * fs,
       for(std::vector<FieldAddress>::const_reverse_iterator field = mFields.rbegin();
 	  field != mFields.rend();
 	  ++field) {
-	std::string tmp = *comp;
-	field->SetVariableLengthString(buf, comp->c_str(), comp->size());
+	boost::filesystem::path tmp = *comp;
+	field->SetVariableLengthString(buf, comp->string().c_str(), comp->string().size());
 	--comp;
       }
       bool good = mPredicate ?
@@ -878,11 +878,12 @@ void SerialOrganizedTable::bind(FileSystem * fs)
     // slash) if present.
     boost::filesystem::path::iterator comp = fsPath.end();
     --comp;
-    if (boost::algorithm::equals(*comp, ".")) {
+    if (boost::algorithm::equals(comp->string(), ".")) {
       --comp;
     }
-    if (comp->size() >= match.size() && 
-	boost::algorithm::equals(match, comp->substr(0,match.size()))) {
+    std::string tmp = comp->string();
+    if (tmp.size() >= match.size() && 
+	boost::algorithm::equals(match, tmp.substr(0,match.size()))) {
       rootPath = (*it)->getPath();
       break;
     }

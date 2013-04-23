@@ -232,7 +232,7 @@ void RuntimeWriteOperator::onEvent(RuntimePort * port)
     if(getWriteType().mHeader.size() && 
        getWriteType().mHeaderFile.size()) {
       boost::filesystem::path p (getWriteType().mHeaderFile);
-      if (boost::algorithm::iequals(".gz", p.extension())) {
+      if (boost::algorithm::iequals(".gz", p.extension().string())) {
 	// TODO: Support compressed header file.
 	throw std::runtime_error("Writing compressed header file not supported yet");
       }

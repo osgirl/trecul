@@ -554,7 +554,7 @@ TempFile::TempFile(const std::string& contents)
   for(int32_t i=0;i<2;i++) {
     boost::filesystem::path tmpStr(FileSystem::getTempFileName());
     boost::filesystem::path tmpPath(tmpDir / tmpStr);
-    int fd = ::open(tmpPath.file_string().c_str(), 
+    int fd = ::open(tmpPath.string().c_str(), 
 		    O_CREAT | O_EXCL | O_WRONLY,
 		    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (-1 == fd) {
@@ -574,7 +574,7 @@ TempFile::TempFile(const std::string& contents)
   }
   throw std::runtime_error((boost::format("Failed to create temporary file in "
 					  "directory %1%") % 
-			    tmpDir.directory_string()).str());
+			    tmpDir.string()).str());
 }
 
 TempFile::~TempFile()
@@ -586,7 +586,7 @@ TempFile::~TempFile()
 
 std::string TempFile::getName() const
 {
-  return mFileName.directory_string();
+  return mFileName.string();
 }
 
 std::string HadoopSetup::hadoopHome()
@@ -798,7 +798,7 @@ AdsPipesJobConf::AdsPipesJobConf(const std::string& jobDir)
   if (!boost::filesystem::exists(mLocalPipesPath))
     throw std::runtime_error((boost::format("Couldn't find ads-df-pipes "
 					    "executable: %1%.  "
-					    "Check installation") % mLocalPipesPath.file_string()).str());
+					    "Check installation") % mLocalPipesPath.string()).str());
   mLocalPipesChecksum = getPipesExecutableChecksum(mLocalPipesPath);
 }
 
@@ -1039,7 +1039,7 @@ void AdsPipesJobConf::copyPipesExecutableToHDFS()
     return;
   }
 
-  int32_t ret = copyFromLocal(mLocalPipesPath.file_string(),
+  int32_t ret = copyFromLocal(mLocalPipesPath.string(),
 			      pipesPath);
   // We might fail because another process has uploaded the file.
   // Only fail if the file doesn't exist.
@@ -1066,7 +1066,7 @@ std::string AdsPipesJobConf::getPipesExecutableChecksum(const boost::filesystem:
   static const int32_t digestSz(16);
   uint8_t buf[bufSz];
   stdio_file_traits::file_type f = 
-    stdio_file_traits::open_for_read(p.file_string().c_str(), 0, 
+    stdio_file_traits::open_for_read(p.string().c_str(), 0, 
 				     std::numeric_limits<uint64_t>::max());
   md5_byte_t md5digest[digestSz];
   md5_state_t md5sum;
@@ -1295,7 +1295,7 @@ GdbStackTrace::GdbStackTrace()
     mInitializers.push_back(ppiptr(new PosixArgument("-ex")));
     mInitializers.push_back(ppiptr(new PosixArgument("quit")));
     mInitializers.push_back(ppiptr(new PosixArgument("-s")));
-    mInitializers.push_back(ppiptr(new PosixArgument(Executable::getPath().file_string())));
+    mInitializers.push_back(ppiptr(new PosixArgument(Executable::getPath().string())));
     mInitializers.push_back(ppiptr(new PosixArgument("-p")));
     mInitializers.push_back(ppiptr(new PosixArgument(boost::lexical_cast<std::string>(::getpid()))));
   }
@@ -1526,8 +1526,8 @@ ProcessPipe::ProcessPipe()
 
   // Create the fd devices and have them close the
   // fd on d'tor.
-  mSink.open(pipe_fd[1], true);
-  mSource.open(pipe_fd[0], true);
+  mSink.open(pipe_fd[1], boost::iostreams::close_handle);
+  mSource.open(pipe_fd[0], boost::iostreams::close_handle);
 }
 
 PosixProcessFactory::PosixProcessFactory()
@@ -1561,7 +1561,7 @@ void PosixProcessFactory::onPostForkChild(const inits_type& initializers)
   }
 
   // TODO: Possibly add PATH search.
-  ::execve(mExe.file_string().c_str(), mArgs.get(), mEnvVars.get());
+  ::execve(mExe.string().c_str(), mArgs.get(), mEnvVars.get());
   // Only get here with failed exec.
   onFailedExecChild(initializers);
 }  
@@ -1652,7 +1652,7 @@ int32_t PosixProcessFactory::waitForCompletion()
 PosixPath::PosixPath(const boost::filesystem::path& exe)
   :
   mPath(exe),
-  mPathChars(exe.file_string())
+  mPathChars(exe.string())
 {
 }
 
