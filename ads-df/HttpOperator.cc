@@ -594,13 +594,17 @@ private:
   HttpSession::SessionQueue mCompletedSessions;
   RecordBuffer mBuffer;
   boost::asio::io_service& mIOService;
+  boost::asio::signal_set mShutdownSignal;
+  bool mAccepting;
 
 public:
   HttpReadOperator(RuntimeOperator::Services& services, 
 		  const HttpReadOperatorType& opType)
     :
     RuntimeOperatorBase<HttpReadOperatorType>(services, opType),
-    mIOService(services.getIOService())
+    mIOService(services.getIOService()),
+    mShutdownSignal(services.getIOService(), SIGURG),
+    mAccepting(true)
   {
     using boost::asio::ip::tcp;
     mAcceptor = new tcp::acceptor(mIOService,
@@ -613,13 +617,33 @@ public:
     delete mAcceptor;
   }
 
-  static void handleAccept(ServiceCompletionFifo * fifo,
-			   const boost::system::error_code& error)
+  void handleAccept(ServiceCompletionFifo * fifo,
+		    const boost::system::error_code& error)
   {
+    if (error) {
+      std::cerr << "Received error in asynchronous accept: " << error << std::endl;
+      // Communicate error by clearing session.
+      delete mAcceptingSession;
+      mAcceptingSession = NULL;
+    }
     // Post the response into the scheduler
     RecordBuffer buf;
     // TODO: Error handling...
     fifo->write(buf);
+  }
+
+  void handleShutdown(const boost::system::error_code& error,
+		      int signal_number)
+  {
+    std::cout << "Received shutdown request (signal number = " << signal_number << ")" << std::endl;
+    if (mAcceptor) {
+      boost::system::error_code ec;
+      mAcceptor->cancel(ec);
+      if (ec) {
+	std::cerr << "Failed cancelling accept" << std::endl;
+      }
+    }
+    mAccepting = false;
   }
 
   /**
@@ -641,21 +665,31 @@ public:
     return *((HttpSession *) buf.Ptr);
   }
 
+  void waitForShutdown()
+  {
+    mShutdownSignal.async_wait(boost::bind(&HttpReadOperator::handleShutdown, this, 
+					   boost::asio::placeholders::error, 
+					   boost::asio::placeholders::signal_number));
+  }
+
   void accept()
   {
     // accept a connection
-    using boost::asio::ip::tcp;
-    HttpSession * session = new HttpSession(new tcp::socket(mIOService),
-					    getMyOperatorType().mMalloc,
-					    getMyOperatorType().mRequestType);
-    mAcceptor->async_accept(session->socket(),
-			    boost::bind(&HttpReadOperator::handleAccept, 
-					&(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo()),
-					boost::asio::placeholders::error));
-    mAcceptingSession = session;
+    if (mAccepting) {
+      using boost::asio::ip::tcp;
+      HttpSession * session = new HttpSession(new tcp::socket(mIOService),
+					      getMyOperatorType().mMalloc,
+					      getMyOperatorType().mRequestType);
+      mAcceptor->async_accept(session->socket(),
+			      boost::bind(&HttpReadOperator::handleAccept, 
+					  this,
+					  &(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo()),
+					  boost::asio::placeholders::error));
+      mAcceptingSession = session;
+    }
   }
 
-  void requestIOs()
+  bool requestIOs()
   {
     // TODO: Figure out an abstraction for this horrifically 
     // non intuitive issue: the requestIO method may link the 
@@ -665,11 +699,18 @@ public:
     // relink them.  Rethink the API here.
     getCompletionPorts()[0]->request_unlink();
     // END TODO
-    if (mCompletedSessions.empty() &&
+    if (!mAccepting && mOpenSessions.empty() &&
+	mOutputReadySessions.empty() && 
+	mCompletedSessions.empty()) {
+      std::cout << "No longer accepting new connections and no open sessions. Shutting down operator." << std::endl;
+      return false;
+    } else if (mCompletedSessions.empty() &&
 	mOutputReadySessions.empty()) {
       requestCompletion(0);
+      return true;
     } else {
       requestIO(*getCompletionPorts()[0], *getOutputPorts()[0]);
+      return true;
     }
   }
 
@@ -719,9 +760,10 @@ public:
   {
     switch(mState) {
     case START:
+      waitForShutdown();
       requestIOs();
       accept();
-      while(true) {
+      do {
 	mState = WAIT;
 	return;
       case WAIT:
@@ -730,9 +772,11 @@ public:
 	  // Is this a new connection or a read for a session
 	  if (isAccept(mBuffer)) {
 	    // Start the session and accept a new connection.	    
-	    mAcceptingSession->onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
-	    enqueueOpen(*mAcceptingSession);
-	    mAcceptingSession = NULL;
+	    if (mAcceptingSession) {
+	      mAcceptingSession->onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
+	      enqueueOpen(*mAcceptingSession);
+	      mAcceptingSession = NULL;
+	    }
 	    accept();
 	  } else {
 	    // Move session forward; if newly completed then we
@@ -768,9 +812,8 @@ public:
 	    enqueueOpen(session);
 	  }
 	}
-	// Make next request for IO based on current server state.
-	requestIOs();
-      }
+	// Make next request for IO based on current server state.	
+      } while(requestIOs());
 
       // All done close up shop.
       requestWrite(0);
