@@ -431,6 +431,7 @@ LogicalFileRead::LogicalFileRead()
   mSkipHeader(false),
   mFieldSeparator('\t'),
   mRecordSeparator('\n'),
+  mEscapeChar('\\'),
   mFormat(NULL)
 {
 }
@@ -455,6 +456,19 @@ void LogicalFileRead::check(PlanCheckContext& ctxt)
     try {
       if (it->equals("comment")) {
 	mCommentLine = getStringValue(ctxt, *it);
+      } else if (it->equals("escapechar")) {
+	std::string tmp = getStringValue(ctxt, *it);
+	if (tmp.size() == 0) {
+	  mEscapeChar = 0;
+	} else if (tmp.size() == 1) {
+	  mEscapeChar = tmp[0];
+	} else if (boost::algorithm::equals(tmp, "\\t")) {
+	  mEscapeChar = '\t';
+	} else if (boost::algorithm::equals(tmp, "\\n")) {
+	  mEscapeChar = '\n';
+	} else {
+	  ctxt.logError(*this, "unsupported escape character");
+	}
       } else if (it->equals("file")) {
 	mFile = getStringValue(ctxt, *it);
       } else if (it->equals("fieldseparator")) {
@@ -497,7 +511,7 @@ void LogicalFileRead::check(PlanCheckContext& ctxt)
 	    tokIt != tok.end();
 	    ++tokIt) {
 	  // TODO: Validate that these are valid field names.
-	 referenced.push_back(boost::trim_copy(*tokIt));
+	  referenced.push_back(boost::trim_copy(*tokIt));
 	}
       } else if (it->equals("bucketed")) {
 	mBucketed = getBooleanValue(ctxt, *it);
@@ -573,6 +587,7 @@ void LogicalFileRead::internalCreate(class RuntimePlanBuilder& plan)
     serial_op_type * sot = new serial_op_type(p,
 					      mFieldSeparator,
 					      mRecordSeparator,
+					      mEscapeChar,
 					      getOutput(0)->getRecordType(),
 					      mFormat,
 					      mCommentLine.c_str());
@@ -582,6 +597,7 @@ void LogicalFileRead::internalCreate(class RuntimePlanBuilder& plan)
     text_op_type * tot = new text_op_type(mFile,
 					  mFieldSeparator,
 					  mRecordSeparator,
+					  mEscapeChar,
 					  getOutput(0)->getRecordType(),
 					  mFormat,
 					  mCommentLine.c_str());

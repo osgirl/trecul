@@ -395,6 +395,7 @@ public:
 				  const RecordType * baseRecordType,
 				  char fieldDelim,
 				  char recordDelim,
+				  char escapeChar, 
 				  std::vector<FieldImporter >& importers)
   {
     typedef FieldImporter field_importer_type;
@@ -415,7 +416,7 @@ public:
 	// Dispatch on in-memory type.
 	switch(member.GetType()->GetEnum()) {
 	case FieldType::VARCHAR:
-	  fit.InitVariableLengthTerminatedString(offset, delim, 
+	  fit.InitVariableLengthTerminatedString(offset, delim, escapeChar,
 						 member.GetType()->isNullable());
 	  break;
 	case FieldType::CHAR:
@@ -615,17 +616,28 @@ private:
     return false;    
   }
 
+  bool ImportVariableLengthTerminatedStringWithEscapes(DataBlock& source, RecordBuffer target) const;
+
   bool ImportVariableLengthTerminatedString(DataBlock& source, RecordBuffer target) const
   {
     // HACK: stuff terminator in mSize since it isn't used otherwise
-    uint8_t term = (uint8_t) mSourceSize;
+    TerminatedString * ts = (TerminatedString *) &mSourceSize;
+    uint8_t term = ts->TermChar;
+    uint8_t escape = ts->EscapeChar;
     uint8_t * s = source.open(1);
     AutoMark<DataBlock> m(source);
     while(true) {
       if (!s) return false;
       if (*s != term) {
-	source.consume(1);
-	s = source.open(1);
+	if (*s != escape || escape == 0) {
+	  source.consume(1);
+	  s = source.open(1);
+	} else {
+	  if (s != source.getMark()) {
+	    mTargetOffset.SetVariableLengthString(target, (const char *) source.getMark(), s-source.getMark());
+	  }
+	  return ImportVariableLengthTerminatedStringWithEscapes(source, target);
+	}
       } else {
 	break;
       }
@@ -890,6 +902,12 @@ private:
     uint8_t PadChar;
   };
 
+  struct TerminatedString
+  {
+    uint8_t TermChar;
+    uint8_t EscapeChar;
+  };
+
 public:
   FieldImporter() 
     :
@@ -939,9 +957,11 @@ public:
     }
   }
 
-  void InitVariableLengthTerminatedString(const FieldAddress& targetOffset, char terminator, bool nullable=false)
+  void InitVariableLengthTerminatedString(const FieldAddress& targetOffset, char terminator, char escape, bool nullable)
   {
-    mSourceSize = (uint8_t) terminator;
+    TerminatedString * ts = (TerminatedString *) &mSourceSize;
+    ts->TermChar = (uint8_t) terminator;
+    ts->EscapeChar = (uint8_t) escape;
     mTargetOffset = targetOffset;
     if (nullable) {
       mImporter = &FieldImporter::ImportNullableField<&FieldImporter::ImportVariableLengthTerminatedString>;
@@ -1450,6 +1470,7 @@ public:
   GenericParserOperatorType(const typename _ChunkStrategy::file_input& file,
 			    char fieldSeparator,
 			    char recordSeparator,
+			    char escapeChar,
 			    const RecordType * recordType,
 			    const RecordType * baseRecordType=NULL,
 			    const char * commentLine = "")
@@ -1467,7 +1488,7 @@ public:
     field_importer_type::createDefaultImport(recordType, 
 					     baseRecordType ? baseRecordType : recordType,
 					     fieldSeparator, 
-					     recordSeparator, mImporters);
+					     recordSeparator, escapeChar, mImporters);
     
     // To skip a line we just parse to newline and discard.
     // We need this when syncing to the middle of a file.

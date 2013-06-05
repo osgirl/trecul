@@ -112,6 +112,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
 				     recordType,
 				     '\t',
 				     0,
+				     '\\',
 				     importers);
   {
     std::string data("82344	String data");
@@ -156,6 +157,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
 				     recordType,
 				     '\t',
 				     0,
+				     '\\',
 				     importers);
   {
     std::string data("82344	String data");
@@ -184,6 +186,189 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
     }
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
+{
+  std::cout << "testImportFromStringDataBlock" << std::endl;
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
+  members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  const RecordType * recordType = RecordType::get(ctxt, members);
+  std::vector<FieldImporter > importers;
+  FieldImporter::createDefaultImport(recordType,
+				     recordType,
+				     '\t',
+				     0,
+				     '\\',
+				     importers);
+  std::vector<FieldImporter > percentImporters;
+  FieldImporter::createDefaultImport(recordType,
+				     recordType,
+				     '\t',
+				     0,
+				     '%',
+				     percentImporters);
+  {
+    std::string data("82344\tString data\\twith escaped tab");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("String data\twith escaped tab", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\t\\nLeading escaped newline");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("\nLeading escaped newline", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tHas escaped\\\\ escape char");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Has escaped\\ escape char", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  const char * inputTokens [] = {"0", "1", "\\f", "2", "3", "\\b", "4", "5", 
+				 "6", "7", "\\r", "8", "\\t", "\\n", "9"};
+  const char * outputTokens [] = {"0", "1", "\f", "2", "3", "\b", "4", "5", 
+				  "6", "7", "\r", "8", "\t", "\n", "9"};
+  for(int32_t i=1; i<512; ++i) {
+    std::stringstream data;
+    data << "82344\tImport different sizes\\n";
+    std::stringstream expected;
+    expected << "Import different sizes\n";
+    for(int32_t j=0; j<i; ++j) {
+      data << inputTokens[j % 15];
+      expected << outputTokens[j % 15];
+    }
+    std::string tmp = data.str();
+    StringDataBlock blk;
+    blk.bindString(tmp);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals(expected.str(), 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\t\\nLeading escaped newline this is a loooooo"
+		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+		     "ooooooooooooooooooooooooooooooooooooooooooooong string");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("\nLeading escaped newline this is a loooooo"
+					 "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+					 "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+					 "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+					 "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+					 "ooooooooooooooooooooooooooooooooooooooooooooong string",
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tInvalid escaped\\ char");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    std::vector<FieldImporter >::iterator it = importers.begin();
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(!it->Import(blk, buf));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tTrailing incomplete escape char\\");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    std::vector<FieldImporter >::iterator it = importers.begin();
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(!it->Import(blk, buf));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tString data%twith escaped tab");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = percentImporters.begin();
+	it != percentImporters.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("String data\twith escaped tab", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tInvalid escape sequence %z");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    std::vector<FieldImporter >::iterator it = percentImporters.begin();
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(it->Import(blk, buf));
+    ++it;
+    BOOST_CHECK(!it->Import(blk, buf));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tHas escaped%% escape char");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = percentImporters.begin();
+	it != percentImporters.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Has escaped% escape char", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }

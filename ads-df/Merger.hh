@@ -468,6 +468,7 @@ private:
   bool mSkipHeader;
   char mFieldSeparator;
   char mRecordSeparator;
+  char mEscapeChar;
   std::string mCommentLine;
   const RecordType * mFormat;
 

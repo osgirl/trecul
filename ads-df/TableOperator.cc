@@ -802,6 +802,7 @@ void LogicalTableParser::create(class RuntimePlanBuilder& plan)
     opType = new file_op(mFile,
 			 '\t',
 			 '\n',
+			 '\\',
 			 getOutput(0)->getRecordType(),
 			 mTableFormat);
     plan.addOperatorType(opType);
@@ -826,6 +827,7 @@ void LogicalTableParser::create(class RuntimePlanBuilder& plan)
 	  RuntimeOperatorType * opType = new table_op((*p)->getPath(),
 						      '\t',
 						      '\n',
+						      '\\',
 						      po->FileOutput,
 						      po->FileType);
 	  plan.addOperatorType(opType);

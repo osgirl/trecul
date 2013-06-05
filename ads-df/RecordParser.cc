@@ -151,6 +151,63 @@ bool gzip_file_traits::isEOF(file_type f)
   return 0 != ::gzeof(f->mFile) || ::gztell(f->mFile) >= f->mEndOffset;
 }
 
+bool FieldImporter::ImportVariableLengthTerminatedStringWithEscapes(DataBlock& source, 
+								    RecordBuffer target) const
+{
+  TerminatedString * ts = (TerminatedString *) &mSourceSize;
+  uint8_t * s = source.open(1);
+  uint8_t term = ts->TermChar;
+  uint8_t escape = ts->EscapeChar;
+  uint8_t localBuf[64];
+  uint8_t localBufPtr = 0;
+  while(true) {
+    if (!s) return false;
+    if (localBufPtr == 64 || *s == term) {
+      if (localBufPtr > 0) {
+	mTargetOffset.getVarcharPtr(target)->append((const char *) &localBuf[0], localBufPtr);
+	localBufPtr = 0;
+      }
+      if (*s == term) {
+	return true;
+      }
+    }
+    if (*s != escape) {
+      localBuf[localBufPtr++] = *s;
+    } else {
+      source.consume(1);
+      s = source.open(1);
+      if (!s) return false;
+      switch(*s) {
+      case 'n':
+	localBuf[localBufPtr++] = '\n';
+	break;
+      case 'b':
+	localBuf[localBufPtr++] = '\b';
+	break;
+      case 'f':
+	localBuf[localBufPtr++] = '\f';
+	break;
+      case 't':
+	localBuf[localBufPtr++] = '\t';
+	break;
+      case 'r':
+	localBuf[localBufPtr++] = '\r';
+	break;
+      default:
+	if (*s == escape) {
+	  localBuf[localBufPtr++] = escape;
+	} else {
+	  return false;
+	}
+      }
+    }
+    source.consume(1);
+    s = source.open(1);
+  }
+
+  return true;
+}
+
 static boost::mutex sDataBlockFactoryGuard;
 
 DataBlockFactory::DataBlockFactory()

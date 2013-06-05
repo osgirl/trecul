@@ -43,6 +43,7 @@ class LogicalInputQueue : public LogicalOperator
 private:
   std::string mStringFormat;
   char mFieldSeparator;
+  char mEscapeChar;
 public:
   LogicalInputQueue();
   ~LogicalInputQueue();
@@ -115,7 +116,7 @@ public:
   }  
 public:
   NativeInputQueueOperatorType(const RecordType * recordType,
-			       char fieldSeparator);
+			       char fieldSeparator, char escapeChar);
 
   ~NativeInputQueueOperatorType();
 

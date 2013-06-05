@@ -38,7 +38,8 @@
 
 LogicalInputQueue::LogicalInputQueue()
   :
-  mFieldSeparator('\t')
+  mFieldSeparator('\t'),
+  mEscapeChar('\\')
 {
 }
 
@@ -52,7 +53,20 @@ void LogicalInputQueue::check(PlanCheckContext& ctxt)
   for(const_param_iterator it = begin_params();
       it != end_params();
       ++it) {
-    if (it->equals("fieldseparator")) {
+    if (it->equals("escapechar")) {
+      std::string tmp = getStringValue(ctxt, *it);
+      if (tmp.size() == 0) {
+	mEscapeChar = 0;
+      } else if (tmp.size() == 1) {
+	mEscapeChar = tmp[0];
+      } else if (boost::algorithm::equals(tmp, "\\t")) {
+	mEscapeChar = '\t';
+      } else if (boost::algorithm::equals(tmp, "\\n")) {
+	mEscapeChar = '\n';
+      } else {
+	ctxt.logError(*this, "unsupported escape character");
+      }
+    } else if (it->equals("fieldseparator")) {
       std::string tmp = getStringValue(ctxt, *it);
       if (tmp.size() == 1) {
 	mFieldSeparator = tmp[0];
@@ -84,13 +98,13 @@ void LogicalInputQueue::create(class RuntimePlanBuilder& plan)
 {
   RuntimeOperatorType * opType =
     new NativeInputQueueOperatorType(getOutput(0)->getRecordType(),
-				     mFieldSeparator);
+				     mFieldSeparator, mEscapeChar);
   plan.addOperatorType(opType);
   plan.mapOutputPort(this, 0, opType, 0);  
 }
 
 NativeInputQueueOperatorType::NativeInputQueueOperatorType(const RecordType * recordType,
-							   char fieldSeparator)
+							   char fieldSeparator, char escapeChar)
   :
   RuntimeOperatorType("NativeInputQueueOperatorType")
 {
@@ -99,7 +113,7 @@ NativeInputQueueOperatorType::NativeInputQueueOperatorType(const RecordType * re
 
   // Records have tab delimited fields and 0 delimited records
   field_importer_type::createDefaultImport(recordType, recordType, fieldSeparator, 
-					   (char) 0, mImporters);
+					   (char) 0, escapeChar, mImporters);
 }
 
 NativeInputQueueOperatorType::~NativeInputQueueOperatorType()
