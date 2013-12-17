@@ -57,7 +57,7 @@ set(Boost_USE_MULTITHREADED ON)
 #
 # Boost
 #
-find_package( Boost 1.42 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
+find_package( Boost 1.49 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
 include_directories ( ${Boost_INCLUDE_DIR} )
 
 #
