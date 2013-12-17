@@ -117,6 +117,38 @@ typedef union tagVarchar {
     ::memcpy(buf, lhs, len);
     buf[len] = 0;
   }
+  void append(const char * lhs, int32_t len)
+  {
+    if (!Large.Large) {
+      int32_t before = Small.Size;
+      int32_t after = before + len;
+      if (after < MIN_LARGE_STRING_SIZE) {
+	char * buf = &Small.Data[0];
+	memcpy(buf + before, lhs, len);
+	Small.Size = after;
+	Small.Large = 0;
+	buf[after] = 0;
+      } else {
+	char * buf = (char *) ::malloc(after + 1);
+	memcpy(buf, &Small.Data[0], before);
+	memcpy(buf + before, lhs, len);
+	Large.Size = after;
+	Large.Ptr = buf;  
+	Large.Large = 1;
+	buf[after] = 0;
+      }
+    } else {
+      int32_t before = Large.Size;
+      int32_t after = before + len;
+      char * buf = (char *) ::realloc(const_cast<char *>(Large.Ptr), 
+				      after + 1);
+      memcpy(buf + before, lhs, len);
+      Large.Size = after;
+      Large.Ptr = buf;  
+      Large.Large = 1;
+      buf[after] = 0;
+    }
+  }
   int32_t size() const
   {
     return Large.Large ? Large.Size : Small.Size;
