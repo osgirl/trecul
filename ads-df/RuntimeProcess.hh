@@ -40,6 +40,7 @@
 #include <map>
 #include <boost/dynamic_bitset/dynamic_bitset.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <boost/filesystem.hpp>
 #include <boost/shared_ptr.hpp>
 
 #include "DataflowRuntime.hh"
@@ -449,6 +450,15 @@ public:
   static void setEnvironment();
 };
 
+class Executable
+{
+public:
+  /**
+   * Get full path to the executable that is running.
+   */
+  static boost::filesystem::path getPath();
+};
+
 /**
  * Some classes for process management.
  * These classes are culled together from
@@ -596,6 +606,12 @@ public:
    */
   int32_t waitForCompletion(boost::system::error_code & ec);
   int32_t waitForCompletion();
+  void kill(int32_t signal_number,
+	    boost::system::error_code & ec);
+  pid_type pid() const
+  {
+    return mPid;
+  }
 };
 
 class PosixPath : public PosixProcessInitializer

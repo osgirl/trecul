@@ -95,15 +95,6 @@ static void readInputFile(const std::string& filename,
   contents = ostr.str();
 }
 
-class Executable
-{
-public:
-  /**
-   * Get full path to the executable that is running.
-   */
-  static boost::filesystem::path getPath();
-};
-
 boost::filesystem::path Executable::getPath()
 {
 #if defined(linux) || defined(__linux) || defined(__linux__)
@@ -1696,6 +1687,18 @@ int32_t PosixProcessFactory::waitForCompletion()
     BOOST_THROW_EXCEPTION(e);
   }
   return ret;
+}
+
+void PosixProcessFactory::kill(int32_t signal_number,
+			       boost::system::error_code & ec)
+{
+  int ret = ::kill(mPid, signal_number);
+  if(0 == ret) {
+    ec.clear();
+  } else {
+    ec = boost::system::error_code(errno,
+				   boost::system::get_system_category());
+  }
 }
 
 PosixPath::PosixPath(const boost::filesystem::path& exe)

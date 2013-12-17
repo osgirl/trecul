@@ -347,9 +347,15 @@ void DataflowScheduler::complete()
 void DataflowScheduler::run()
 {
   init();
-  while(!runSome()) {
-    // All requests are blocked; must be something to wait for
-    // in IO land.  
+  while(true) {
+    // The trick here is to pick a number of dataflow requests
+    // to process before running a poll so that we do
+    // not degrade performance but still service IO with
+    // acceptable latency.
+    RunCompletion ret = runSome(10000);
+    if (ret == NO_REQUESTS_OUTSTANDING) {
+      break;
+    }
     
     // First give a crack at processing IO without blocking
     // We don't want to flush buffers yet because we want to 
@@ -357,13 +363,19 @@ void DataflowScheduler::run()
     // due to IO waits.  Could also opt to busy wait (poll multiple
     // times) for a bit before giving up.
     std::size_t processed = mIOService->poll();
-    if (0 != processed) {
-      // An IO completed so try to run operators again
+    if (0 != processed || MAX_ITERATIONS_REACHED == ret) {
+      // An IO completed or there are dataflow ops
+      // outstanding so try to run operators again
       mIOService->reset();
       mNumIOPoll += 1;
       continue;
     }
-    // Hmmm.  No IOs were ready but we may have some records
+
+    // All requests are blocked; must be something to wait for
+    // in IO land.  
+    BOOST_ASSERT(NO_ENABLED_REQUESTS == ret);
+
+    // No IOs were ready but we may have some records
     // hanging out in port buffers that we can try to flush
     // through the system.  This isn't good for throughput but
     // we also want reasonable latency for records to be processed

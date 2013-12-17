@@ -115,7 +115,7 @@ int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length,
       default:
 	mField.push_back(*c);
 	break;
-      }	
+      }
       break;
     case PERCENT_DECODE_x:
       if (*c >= '0' && *c <= '9') {
@@ -125,8 +125,8 @@ int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length,
 	if (lower >= 'a' && lower <= 'f') {
 	  mDecodeChar = (char) (lower - 'a' + 10);
 	} else {
-	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  mField.clear();
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_xx;
@@ -139,8 +139,8 @@ int32_t QueryStringOperator::onQueryStringField(const char * c, size_t length,
 	if (lower >= 'a' && lower <= 'f') {
 	  mField.push_back((char) ((mDecodeChar<<4) + lower - 'a' + 10));
 	} else {
-	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  mField.clear();
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_START;
@@ -188,8 +188,8 @@ int32_t QueryStringOperator::onQueryStringValue(const char * c, size_t length,
 	if (lower >= 'a' && lower <= 'f') {
 	  mDecodeChar = (char) (lower - 'a' + 10);
 	} else {
-	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  mValue.clear();
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_xx;
@@ -202,8 +202,8 @@ int32_t QueryStringOperator::onQueryStringValue(const char * c, size_t length,
 	if (lower >= 'a' && lower <= 'f') {
 	  mValue.push_back((char) ((mDecodeChar<<4) + lower - 'a' + 10));
 	} else {
-	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  mValue.clear();
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_START;

@@ -22,8 +22,9 @@ public:
   {
   }
 
-  std::size_t parse(const char * data, std::size_t sz)
+  int32_t parse(const char * data, std::size_t sz)
   {
+    int32_t ret = 0;
     const char * fieldMark = NULL;
     const char * valueMark = NULL;
 
@@ -32,12 +33,11 @@ public:
       switch(mState) {
       case VALUE_START:
       case VALUE:
-	mProcessor->onQueryStringValue(NULL, 0, true);
 	mState = FIELD_START;
-	return 0;
+	return mProcessor->onQueryStringValue(NULL, 0, true);
       default:
-	// TODO: Error instead of throw
-	throw std::runtime_error("Invalid query string");
+	mState = FIELD_START;
+	return -1;
       }
     }
 
@@ -74,7 +74,10 @@ public:
       case FIELD:
 	if (*c == mFieldValueSeparator) {
 	  mState = VALUE_START;
-	  mProcessor->onQueryStringField(fieldMark, c - fieldMark, true);
+	  ret = mProcessor->onQueryStringField(fieldMark, c - fieldMark, true);
+	  if (ret != 0) {
+	    return ret;
+	  }
 	  fieldMark = NULL;
 	} 
 	// TODO: Validate other characters?
@@ -85,12 +88,17 @@ public:
 	  // Empty value OK call onQueryStringValue with empty
 	  // string to distinguish
 	  // case the field is present with empty from not present.
-	  mProcessor->onQueryStringValue(c, 0, true);
+	  ret = mProcessor->onQueryStringValue(c, 0, true);
+	  if (ret != 0) {
+	    return ret;
+	  }
 	  if (*c == '\n') {
-	    // This is not standard but is specific to DLR
-	    // aggregation.
-	    // Yuck.
-	    mProcessor->onQueryStringComplete();
+	    // This is not standard but is specific to Akamai DLR
+	    // aggregation.  Yuck.
+	    ret = mProcessor->onQueryStringComplete();
+	    if (ret != 0) {
+	      return ret;
+	    }
 	  }
 	  mState = FIELD_START;
 	  break;
@@ -103,12 +111,18 @@ public:
       case VALUE:
 	if (*c == mPairSeparator || *c == '\n') {
 	  mState = FIELD_START;
-	  mProcessor->onQueryStringValue(valueMark, c - valueMark, true);
+	  ret = mProcessor->onQueryStringValue(valueMark, c - valueMark, true);
+	  if (ret != 0) {
+	    return ret;
+	  }
 	  if (*c == '\n') {
 	    // This is not standard but is specific to DLR
 	    // aggregation.
 	    // Yuck.
-	    mProcessor->onQueryStringComplete();
+	    ret = mProcessor->onQueryStringComplete();
+	    if (ret != 0) {
+	      return ret;
+	    }
 	  }
 	  valueMark = NULL;
 	} 
@@ -119,13 +133,21 @@ public:
 
     // send any data to callback
     if (fieldMark != NULL) {
-      mProcessor->onQueryStringField(fieldMark, end - fieldMark, false);
+      ret = mProcessor->onQueryStringField(fieldMark, end - fieldMark, false);
+      if (ret != 0) {
+	return ret;
+      }
       fieldMark = NULL;
     }
     if (valueMark != NULL) {
-      mProcessor->onQueryStringValue(valueMark, end - valueMark, false);
+      ret = mProcessor->onQueryStringValue(valueMark, end - valueMark, false);
+      if (ret != 0) {
+	return ret;
+      }
       valueMark = NULL;
     }
+    
+    return ret;
   }
 };
 

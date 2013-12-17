@@ -667,6 +667,8 @@ public:
 };
 
 LocalWritableFile::LocalWritableFile(int fd)
+  :
+  mFile(fd)
 {
 }
 
@@ -676,10 +678,15 @@ LocalWritableFile::~LocalWritableFile()
 
 bool LocalWritableFile::close()
 {
+  int ret = ::close(mFile);
+  return ret == 0;
 }
 
 bool LocalWritableFile::flush()
 {
+  // TODO: Use appropriate syncfd if available.
+  ::sync();
+  return true;
 }
 
 int32_t LocalWritableFile::write(const uint8_t * buf, std::size_t len)

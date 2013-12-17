@@ -1,10 +1,12 @@
 #include <deque>
+#include <boost/algorithm/string/trim.hpp>
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
 #include <boost/format.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/make_shared.hpp>
+#include <boost/tokenizer.hpp>
 
 #include "RuntimeProcess.hh"
 #include "HttpOperator.hh"
@@ -22,7 +24,9 @@ HttpRequestType::HttpRequestType(const RecordType * ty)
   mUserAgent(ty->getFieldAddress("User-Agent")),
   mContentType(ty->getFieldAddress("Content-Type")),
   mUrl(ty->getFieldAddress("RequestUrl")),
-  mBody(ty->getFieldAddress("body"))
+  mBody(ty->getFieldAddress("body")),
+  mMalloc(ty->getMalloc()),
+  mFree(ty->getFree())
 {
   for(RecordType::const_member_iterator m = ty->begin_members(),
 	e = ty->end_members(); m != e; ++m) {
@@ -85,6 +89,23 @@ void HttpRequestType::appendVarchar(const char * start, const char * end,
   }
 }
 
+const char * HttpRequestType::getUrl(RecordBuffer buf) const
+{
+  Varchar * v = mUrl.getVarcharPtr(buf);
+  return v != NULL ? v->c_str() : NULL;
+}
+
+RecordBuffer HttpRequestType::malloc() const
+{
+  return mMalloc.malloc();
+}
+
+void HttpRequestType::free(RecordBuffer buf) const
+{
+  mFree.free(buf);
+}
+
+
 /**
  * The model here is that the http read operator listens on a port
  * and accepts HTTP messages.  The messages are parsed and sent as
@@ -105,8 +126,29 @@ void HttpRequestType::appendVarchar(const char * start, const char * end,
  * likely need such a design however.
  */
 
+class HttpSessionCallback
+{
+public:
+  virtual ~HttpSessionCallback() {}
+  virtual void onReadWriteRequest() =0;
+  virtual void onReadWriteCompletion(RecordBuffer buf) =0;
+};
+
 class HttpSession
 {
+private:
+  void setResponse(const char * resp);
+  void setResponseOK();
+  void setResponseBadRequest();
+  void setResponseForbidden();
+  void setResponseNotFound();
+  void setResponseMethodNotAllowed();
+  void setResponseInternalServerError();
+  void setResponseNotImplemented();
+  
+  std::string mPostResource;
+  std::string mAliveResource;
+
 public:
   /**
    * HTTP parser callbacks
@@ -124,11 +166,11 @@ public:
    * ASIO handlers
    */
   static void handleRead(HttpSession * session,
-			 ServiceCompletionFifo * fifo,
+			 HttpSessionCallback * fifo,
 			 const boost::system::error_code& error,
 			 size_t bytes_transferred);
   static void handleWrite(HttpSession * session,
-			  ServiceCompletionFifo * fifo,
+			  HttpSessionCallback * fifo,
 			  const boost::system::error_code& error,
 			  size_t bytes_transferred);
   /**
@@ -141,36 +183,40 @@ public:
 					&HttpSession::mSessionHook> SessionQueueOption;
   typedef boost::intrusive::list<HttpSession, SessionQueueOption, boost::intrusive::constant_time_size<false> > SessionQueue;
 
-  enum State { START, READ, WRITE };
-  State mState;
   boost::asio::ip::tcp::socket * mSocket;
-  RecordTypeMalloc mMalloc;
-  std::deque<RecordBuffer> mBuffers;
+  RecordBuffer mConstructing;
+  std::deque<RecordBuffer> mCompletedBuffers;
   http_parser mParser;
   http_parser_settings mParserSettings;
-  bool mMessageComplete;
-  bool mResponseComplete;
-  // the mIO buffer points to an allocated region
-  // sometimes and other times points to static text.
-  bool mFreeBuffer;
   std::size_t mIOSize;
   char * mIO;
   const HttpRequestType& mRequestType;
   QueryStringParser<HttpSession> mQueryStringParser;
+  std::string mField;
+  std::string mValue;
   int32_t mQueueIndex;
+  char mDecodeChar;
+  enum State { START, READ, WRITE };
+  State mState : 2;
+  bool mMessageComplete : 1;
+  bool mResponseComplete : 1;
+  // the mIO buffer points to an allocated region
+  // sometimes and other times points to static text.
+  bool mFreeBuffer : 1;
+  enum UrlState { URL_UNVALIDATED=0, URL_VALID, URL_INVALID };
+  UrlState mUrlState : 2;
 
   // For processing name-value pairs (headers or query string
   // parameters).
-  enum DecodeState { PERCENT_DECODE_START, PERCENT_DECODE_x, PERCENT_DECODE_xx };
-  DecodeState mDecodeState;
-  char mDecodeChar;
-  std::string mField;
-  std::string mValue;
+  enum DecodeState { PERCENT_DECODE_START=0, PERCENT_DECODE_x, PERCENT_DECODE_xx };
+  DecodeState mDecodeState : 2;
 
   void close();
+  void validateUrl();
   
   HttpSession(boost::asio::ip::tcp::socket * socket,
-	      const RecordTypeMalloc & recordMalloc,
+	      const std::string& postResource,
+	      const std::string& aliveResource,
 	      const HttpRequestType & requestType);
   ~HttpSession();
   boost::asio::ip::tcp::socket& socket()
@@ -180,7 +226,7 @@ public:
   bool completed() const;
   bool error() const;
   std::deque<RecordBuffer> & buffers();
-  void onEvent(ServiceCompletionPort * p);
+  void onEvent(HttpSessionCallback * p);
 
   int32_t getQueueIndex() const
   {
@@ -241,22 +287,25 @@ int HttpSession::on_message_complete(http_parser * p)
 }
 
 HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
-			 const RecordTypeMalloc & recordMalloc,
+			 const std::string& postResource,
+			 const std::string& aliveResource,
 			 const HttpRequestType& requestType)
   :
-  mState(START),
+  mPostResource(postResource),
+  mAliveResource(aliveResource),
   mSocket(socket),
-  mMalloc(recordMalloc),
-  mMessageComplete(false),
-  mResponseComplete(false),
-  mFreeBuffer(true),
   mIOSize(8192),
   mIO(new char [8192]),
   mRequestType(requestType),
   mQueryStringParser(this),
   mQueueIndex(0),
-  mDecodeState(PERCENT_DECODE_START),
-  mDecodeChar(0)
+  mDecodeChar(0),
+  mState(START),
+  mMessageComplete(false),
+  mResponseComplete(false),
+  mFreeBuffer(true),
+  mUrlState(URL_UNVALIDATED),
+  mDecodeState(PERCENT_DECODE_START)
 {
   ::http_parser_init(&mParser, HTTP_REQUEST);
   mParser.data = this;
@@ -268,7 +317,7 @@ HttpSession::HttpSession(boost::asio::ip::tcp::socket * socket,
   mParserSettings.on_headers_complete = on_headers_complete;
   mParserSettings.on_body = on_body;
   mParserSettings.on_message_complete = on_message_complete;
-  mBuffers.push_back(mMalloc.malloc());
+  mConstructing = mRequestType.malloc();
 }
 
 HttpSession::~HttpSession()
@@ -277,6 +326,13 @@ HttpSession::~HttpSession()
   if (mFreeBuffer) {
     delete [] mIO;
     mIO = NULL;
+  }
+  if (mConstructing != RecordBuffer()) {
+    mRequestType.free(mConstructing);
+  }
+  for(std::deque<RecordBuffer>::iterator b = mCompletedBuffers.begin(),
+  	e = mCompletedBuffers.end(); b != e; ++b) {
+    mRequestType.free(*b);
   }
 }
 
@@ -289,6 +345,20 @@ void HttpSession::close()
   }
 }
 
+void HttpSession::validateUrl()
+{
+  if (mUrlState == URL_UNVALIDATED) {
+    const char * c = mRequestType.getUrl(mConstructing);
+    if (c && 
+	((boost::algorithm::iequals(c, mPostResource) && mParser.method == HTTP_POST) ||
+	 (boost::algorithm::iequals(c, mAliveResource) && mParser.method == HTTP_GET))) {
+      mUrlState = URL_VALID;
+    } else {
+      mUrlState = URL_INVALID;
+    }
+  }
+}
+
 bool HttpSession::completed() const
 {
   // Request completed and response sent
@@ -297,92 +367,154 @@ bool HttpSession::completed() const
 
 bool HttpSession::error() const
 {
-  return false;
+  // Don't return error() until we are done with the response.
+  // TODO: Perhaps we should rename this since we are calling
+  // an aliveness ping an error so that the operator doesn't output
+  // anything.
+  return (mSocket == NULL && (mParser.http_errno != HPE_OK || 
+			      mUrlState == URL_INVALID ||
+			      mParser.method == HTTP_GET)) ||
+    (mSocket != NULL && !mSocket->is_open());
 }
 
 std::deque<RecordBuffer>& HttpSession::buffers()
 {
-  return mBuffers;
+  return mCompletedBuffers;
 }
 
 void HttpSession::handleRead(HttpSession * session,
-			     ServiceCompletionFifo * fifo,
+			     HttpSessionCallback * fifo,
 			     const boost::system::error_code& error,
 			     size_t bytes_transferred)
 {
   // Just enqueue for later execution.
   RecordBuffer buf;
   buf.Ptr = (uint8_t *) session;
-  fifo->write(buf);
+  fifo->onReadWriteCompletion(buf);
   session->mIOSize = bytes_transferred;
+  if (error) {
+    session->mSocket->close();
+  }
 }
 
 void HttpSession::handleWrite(HttpSession * session,
-			     ServiceCompletionFifo * fifo,
+			     HttpSessionCallback * fifo,
 			     const boost::system::error_code& error,
 			     size_t bytes_transferred)
 {
   // Just enqueue for later execution.
   RecordBuffer buf;
   buf.Ptr = (uint8_t *) session;
-  fifo->write(buf);
+  fifo->onReadWriteCompletion(buf);
   BOOST_ASSERT(bytes_transferred <= session->mIOSize);
   session->mIO += bytes_transferred;
   session->mIOSize -= bytes_transferred;
+  if (error) {
+    session->mSocket->close();
+  }
 }
 
-void HttpSession::onEvent(ServiceCompletionPort * p)
+void HttpSession::setResponse(const char * resp)
+{
+  delete [] mIO;
+  mFreeBuffer = false;
+  mIO = const_cast<char *>(resp);
+  mIOSize = ::strlen(mIO);
+}
+
+void HttpSession::setResponseOK()
+{
+  static const char * resp = "HTTP/1.1 200 OK\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseBadRequest()
+{
+  static const char * resp = "HTTP/1.1 400 Bad Request\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseForbidden()
+{
+  static const char * resp = "HTTP/1.1 403 Forbidden\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseNotFound()
+{
+  static const char * resp = "HTTP/1.1 404 Not Found\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseMethodNotAllowed()
+{
+  static const char * resp = "HTTP/1.1 405 Method Not Allowed\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseInternalServerError()
+{
+  static const char * resp = "HTTP/1.1 500 Internal Server Error\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::setResponseNotImplemented()
+{
+  static const char * resp = "HTTP/1.1 501 Not Implemented\r\n";
+  setResponse(resp);
+}
+
+void HttpSession::onEvent(HttpSessionCallback * p)
 {
   switch(mState) {
   case START:
-  while(!mMessageComplete) {
-    // Read and process request
-    mSocket->async_read_some(boost::asio::buffer(mIO, 8192),
-			     boost::bind(&HttpSession::handleRead, 
-					 this,
-					 &p->getFifo(),
-					 boost::asio::placeholders::error,
-					 boost::asio::placeholders::bytes_transferred));
-    mState = READ;
-    return;
-  case READ:
-    {
-      size_t sz = ::http_parser_execute(&mParser, &mParserSettings, mIO,
-					mIOSize);
-      if (mParser.http_errno != HPE_OK) {
-	// TODO: Just error out this request
-	const char * errName = ::http_errno_name(HTTP_PARSER_ERRNO(&mParser));
-	const char * errDesc = ::http_errno_description(HTTP_PARSER_ERRNO(&mParser));
-	throw std::runtime_error("Invalid request");	
-      }
-      if (mParser.upgrade) {
-	// TODO: Just error out this request
-	throw std::runtime_error("Not supporting protocol upgrade");
+    while(mSocket->is_open()) {
+      // Read and process request
+      mSocket->async_read_some(boost::asio::buffer(mIO, 8192),
+			       boost::bind(&HttpSession::handleRead, 
+					   this,
+					   p,
+					   boost::asio::placeholders::error,
+					   boost::asio::placeholders::bytes_transferred));
+      p->onReadWriteRequest();
+      mState = READ;
+      return;
+    case READ:
+      {
+	size_t sz = ::http_parser_execute(&mParser, &mParserSettings, mIO,
+					  mIOSize);
+	if (mParser.http_errno != HPE_OK) {
+	  if (mUrlState == URL_INVALID) {
+	    setResponseNotFound();
+	  } else {
+	    setResponseBadRequest();
+	  }
+	  break;
+	} else if (mParser.upgrade) {
+	  setResponseNotImplemented();
+	  break;
+	} else if (mMessageComplete) {
+	  setResponseOK();
+	  break;
+	}
       }
     }
-  }
-  // Send response
-  static const char * resp200 = "HTTP/1.1 200 OK\r\n";
-  static const char * resp403 = "HTTP/1.1 403 Forbidden\r\n";
-  static const char * resp405 = "HTTP/1.1 405 Method Not Allowed\r\n";
-  static const char * resp500 = "HTTP/1.1 500 Internal Server Error\r\n";
-  delete [] mIO;
-  mFreeBuffer = false;
-  mIO = const_cast<char *>(resp200);
-  mIOSize = ::strlen(mIO);
-  while(mIOSize > 0) {
-    // Read and process request
-    mSocket->async_write_some(boost::asio::buffer(mIO, mIOSize),
-			     boost::bind(&HttpSession::handleWrite, 
-					 this,
-					 &p->getFifo(),
-					 boost::asio::placeholders::error,
-					 boost::asio::placeholders::bytes_transferred));
-    mState = WRITE;
-    return;
-  case WRITE:;
-  }
-  close();
+
+    // Send response
+    while(mIOSize > 0 && mSocket->is_open()) {
+      // Read and process request
+      mSocket->async_write_some(boost::asio::buffer(mIO, mIOSize),
+				boost::bind(&HttpSession::handleWrite, 
+					    this,
+					    p,
+					    boost::asio::placeholders::error,
+					    boost::asio::placeholders::bytes_transferred));
+      p->onReadWriteRequest();
+      mState = WRITE;
+      return;
+    case WRITE:;
+    }
+    close();
   }
 }
 
@@ -393,7 +525,7 @@ int32_t HttpSession::onMessageBegin()
 
 int32_t HttpSession::onUrl(const char * c, size_t length)
 {
-  mRequestType.appendUrl(c, c+length, mBuffers.back());
+  mRequestType.appendUrl(c, c+length, mConstructing);
   return 0;
 }
 
@@ -404,11 +536,15 @@ int32_t HttpSession::onStatusComplete()
 
 int32_t HttpSession::onHeaderField(const char * c, size_t length)
 {
+  validateUrl();
+  if (mUrlState == URL_INVALID) {
+    return -1;
+  }
   if (mValue.size() > 0) {
     // TODO: Handle empty value
     BOOST_ASSERT(mField.size() > 0);
     BOOST_ASSERT(mRequestType.hasField(mField));
-    mRequestType.setField(mField, mValue, mBuffers.back());
+    mRequestType.setField(mField, mValue, mConstructing);
     mField.clear();
     mValue.clear();
   }
@@ -430,8 +566,12 @@ int32_t HttpSession::onHeaderValue(const char * c, size_t length)
 
 int32_t HttpSession::onHeadersComplete()
 {
+  validateUrl();
+  if (mUrlState == URL_INVALID) {
+    return -1;
+  }
   if (mField.size() > 0) {
-    mRequestType.setField(mField, mValue, mBuffers.back());
+    mRequestType.setField(mField, mValue, mConstructing);
     mField.clear();
     mValue.clear();
   }
@@ -440,13 +580,18 @@ int32_t HttpSession::onHeadersComplete()
 
 int32_t HttpSession::onBody(const char * c, size_t length)
 {
-  mQueryStringParser.parse(c, length);
-  mRequestType.appendBody(c, c+length, mBuffers.back());
-  return 0;
+  int32_t ret = mQueryStringParser.parse(c, length);
+  mRequestType.appendBody(c, c+length, mConstructing);
+  return ret;
 }
 
 int32_t HttpSession::onMessageComplete()
 {
+  if (mConstructing != RecordBuffer()) {
+    mCompletedBuffers.push_back(mConstructing);
+    mConstructing = RecordBuffer();
+  }
+  BOOST_ASSERT(mCompletedBuffers.size() > 0);
   mMessageComplete = true;
   return 0;
 }
@@ -454,6 +599,9 @@ int32_t HttpSession::onMessageComplete()
 int32_t HttpSession::onQueryStringField(const char * c, size_t length, 
 					bool done)
 {
+  if (mConstructing == RecordBuffer()) {
+    mConstructing = mRequestType.malloc();
+  }
   // Like onHeaderField except we urldecode 
   mField.reserve(mField.size() + length);
   const char * end = c + length;
@@ -481,7 +629,7 @@ int32_t HttpSession::onQueryStringField(const char * c, size_t length,
 	  mDecodeChar = (char) (lower - 'a' + 10);
 	} else {
 	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_xx;
@@ -495,7 +643,7 @@ int32_t HttpSession::onQueryStringField(const char * c, size_t length,
 	  mField.push_back((char) ((mDecodeChar<<4) + lower - 'a' + 10));
 	} else {
 	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_START;
@@ -512,6 +660,10 @@ int32_t HttpSession::onQueryStringField(const char * c, size_t length,
 int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
 					bool done)
 {
+  if (mConstructing == RecordBuffer()) {
+    mConstructing = mRequestType.malloc();
+  }
+  std::string tmp(c,length);
   if (mField.size() == 0)
     return 0;
   // Like onHeaderField except we urldecode 
@@ -541,7 +693,7 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
 	  mDecodeChar = (char) (lower - 'a' + 10);
 	} else {
 	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_xx;
@@ -555,7 +707,7 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
 	  mValue.push_back((char) ((mDecodeChar<<4) + lower - 'a' + 10));
 	} else {
 	  // TODO: bogus: try to recover
-	  throw std::runtime_error("Invalid post body");
+	  return -1;
 	}
       }
       mDecodeState = PERCENT_DECODE_START;
@@ -565,7 +717,7 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
   if (done) {
     BOOST_ASSERT(mField.size() > 0);
     BOOST_ASSERT(mRequestType.hasField(mField));
-    mRequestType.setField(mField, mValue, mBuffers.back());
+    mRequestType.setField(mField, mValue, mConstructing);
     mField.clear();
     mValue.clear();
   }
@@ -574,10 +726,12 @@ int32_t HttpSession::onQueryStringValue(const char * c, size_t length,
 
 int32_t HttpSession::onQueryStringComplete()
 {
-  mBuffers.push_back(mMalloc.malloc());
+  mCompletedBuffers.push_back(mConstructing);
+  mConstructing = RecordBuffer();
+  return 0;
 }
 
-class HttpReadOperator : public RuntimeOperatorBase<HttpReadOperatorType>
+class HttpReadOperator : public RuntimeOperatorBase<HttpReadOperatorType>, public HttpSessionCallback
 {
 private:
   enum State { START, WAIT, WRITE_EOF };
@@ -595,7 +749,13 @@ private:
   RecordBuffer mBuffer;
   boost::asio::io_service& mIOService;
   boost::asio::signal_set mShutdownSignal;
-  bool mAccepting;
+  int32_t mNumAsyncRequests;
+  bool mListening;
+
+  ServiceCompletionFifo * getServiceCompletionFifo()
+  {
+    return &(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo());
+  }
 
 public:
   HttpReadOperator(RuntimeOperator::Services& services, 
@@ -604,12 +764,15 @@ public:
     RuntimeOperatorBase<HttpReadOperatorType>(services, opType),
     mIOService(services.getIOService()),
     mShutdownSignal(services.getIOService(), SIGURG),
-    mAccepting(true)
+    mNumAsyncRequests(0),
+    mListening(true)
   {
+    // Bind with reuse_addr = true (i.e. set sockopt SO_REUSEADDR).
     using boost::asio::ip::tcp;
     mAcceptor = new tcp::acceptor(mIOService,
 				  tcp::endpoint(tcp::v4(), 
-						opType.mPort));
+						opType.mPort),
+				  true);
   }
   
   ~HttpReadOperator()
@@ -629,7 +792,7 @@ public:
     // Post the response into the scheduler
     RecordBuffer buf;
     // TODO: Error handling...
-    fifo->write(buf);
+    onReadWriteCompletion(buf);
   }
 
   void handleShutdown(const boost::system::error_code& error,
@@ -638,12 +801,15 @@ public:
     std::cout << "Received shutdown request (signal number = " << signal_number << ")" << std::endl;
     if (mAcceptor) {
       boost::system::error_code ec;
-      mAcceptor->cancel(ec);
+      mAcceptor->close(ec);
       if (ec) {
 	std::cerr << "Failed cancelling accept" << std::endl;
       }
     }
-    mAccepting = false;
+    mListening = false;
+    // Just decrement directly instead of calling onReadWriteCompletion
+    // since we have nothing to post.
+    mNumAsyncRequests -= 1;
   }
 
   /**
@@ -670,22 +836,27 @@ public:
     mShutdownSignal.async_wait(boost::bind(&HttpReadOperator::handleShutdown, this, 
 					   boost::asio::placeholders::error, 
 					   boost::asio::placeholders::signal_number));
+    onReadWriteRequest();
   }
 
   void accept()
   {
     // accept a connection
-    if (mAccepting) {
+    if (mListening) {
       using boost::asio::ip::tcp;
       HttpSession * session = new HttpSession(new tcp::socket(mIOService),
-					      getMyOperatorType().mMalloc,
+					      getMyOperatorType().mPostResource,
+					      getMyOperatorType().mAliveResource,
 					      getMyOperatorType().mRequestType);
       mAcceptor->async_accept(session->socket(),
 			      boost::bind(&HttpReadOperator::handleAccept, 
 					  this,
-					  &(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo()),
+					  getServiceCompletionFifo(),
 					  boost::asio::placeholders::error));
+      onReadWriteRequest();
       mAcceptingSession = session;
+    } else {
+      std::cout << "Turned off listening on port" << std::endl;
     }
   }
 
@@ -699,16 +870,26 @@ public:
     // relink them.  Rethink the API here.
     getCompletionPorts()[0]->request_unlink();
     // END TODO
-    if (!mAccepting && mOpenSessions.empty() &&
-	mOutputReadySessions.empty() && 
-	mCompletedSessions.empty()) {
-      std::cout << "No longer accepting new connections and no open sessions. Shutting down operator." << std::endl;
+    uint32_t requestState(0);
+    if (mNumAsyncRequests > 0) {
+      requestState |= 1;
+    }
+    if (!mOutputReadySessions.empty() ||
+	!mCompletedSessions.empty()) {
+      // Want to output a record.
+      requestState |= 2;
+    }
+    switch(requestState) {
+    case 0:
+      std::cout << "HttpOperator::requestIOs: No longer accepting new connections and no open sessions. Shutting down operator." << std::endl;
       return false;
-    } else if (mCompletedSessions.empty() &&
-	mOutputReadySessions.empty()) {
+    case 1:
       requestCompletion(0);
       return true;
-    } else {
+    case 2:
+      requestWrite(0);
+      return true;
+    case 3:
       requestIO(*getCompletionPorts()[0], *getOutputPorts()[0]);
       return true;
     }
@@ -773,7 +954,7 @@ public:
 	  if (isAccept(mBuffer)) {
 	    // Start the session and accept a new connection.	    
 	    if (mAcceptingSession) {
-	      mAcceptingSession->onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
+	      mAcceptingSession->onEvent(this);
 	      enqueueOpen(*mAcceptingSession);
 	      mAcceptingSession = NULL;
 	    }
@@ -782,18 +963,24 @@ public:
 	    // Move session forward; if newly completed then we
 	    // must request a write
 	    HttpSession & session (getSession(mBuffer));
-	    session.onEvent(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0]));
-	    if (session.completed()) {
-	      enqueueCompleted(session);
+	    session.onEvent(this);
+	    if (session.buffers().size() > 0) {
+	      enqueueOutputReady(session);
 	    } else if (session.error()) {
 	      dequeue(session);
 	      // TODO: Logging....
 	      delete &session;
-	    } else if (session.buffers().size() > 1) {
-	      enqueueOutputReady(session);
+	    } else if (session.completed()) {
+	      if (session.buffers().size() == 0) {
+		// Quite likely that we don't have an output here.  The output
+		// was already sent and we have been writing our HTTP response since
+		// that point.
+		dequeue(session);
+		delete &session;
+	      } else {
+		enqueueCompleted(session);
+	      }
 	    }
-	    // TODO: How to shut down gracefully; I think if not listening
-	    // and no more open sessions then don't request completion.
 	  }
 	} else {
 	  // Write an output record.
@@ -803,13 +990,16 @@ public:
 	  HttpSession & session(mOutputReadySessions.empty() ?
 				mCompletedSessions.front() :
 				mOutputReadySessions.front());
+	  BOOST_ASSERT(session.buffers().size() > 0);
 	  write(port, session.buffers().front(), false);
 	  session.buffers().pop_front();
 	  if (0 == session.buffers().size()) {
-	    dequeue(session);
-	    delete &session;
-	  } else if (!session.completed() && session.buffers().size() == 1) {
-	    enqueueOpen(session);
+	    if (session.completed()) {
+	      dequeue(session);
+	      delete &session;
+	    } else {
+	      enqueueOpen(session);
+	    }
 	  }
 	}
 	// Make next request for IO based on current server state.	
@@ -828,12 +1018,26 @@ public:
   {
     mAcceptor->close();
   }  
+
+  void onReadWriteRequest()
+  {
+    mNumAsyncRequests += 1;
+  }
+
+  void onReadWriteCompletion(RecordBuffer buf)
+  {
+    getServiceCompletionFifo()->write(buf);
+    BOOST_ASSERT(mNumAsyncRequests > 0);
+    mNumAsyncRequests -= 1;
+  }
 };
 
 LogicalHttpRead::LogicalHttpRead()
   :
   LogicalOperator(0,0,1,1),
-  mPort(0)
+  mPort(0),
+  mPostResource("/"),
+  mAliveResource("/alive")
 {
 }
 
@@ -844,6 +1048,16 @@ LogicalHttpRead::~LogicalHttpRead()
 void LogicalHttpRead::check(PlanCheckContext& ctxt)
 {
   std::size_t cap = 8192;
+
+  // Intrinsic Members
+  // TODO: Expand the list and then allow selection from it.
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("Content-Length", VarcharType::Get(ctxt, true)));
+  members.push_back(RecordMember("User-Agent", VarcharType::Get(ctxt, true)));
+  members.push_back(RecordMember("Content-Type", VarcharType::Get(ctxt, true)));
+  members.push_back(RecordMember("RequestUrl", VarcharType::Get(ctxt, true))); 
+  members.push_back(RecordMember("body", VarcharType::Get(ctxt, true)));
+
   // Validate the parameters
   for(const_param_iterator it = begin_params();
       it != end_params();
@@ -858,6 +1072,17 @@ void LogicalHttpRead::check(PlanCheckContext& ctxt)
 	} else {
 	  cap = (std::size_t) tmp;
 	}
+      } else if (it->equals("fields")) {
+	std::string str = getStringValue(ctxt, *it);
+	typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+	boost::char_separator<char> sep(",");
+	tokenizer tok(str, sep);
+	for(tokenizer::iterator tokIt = tok.begin();
+	    tokIt != tok.end();
+	    ++tokIt) {
+	  members.push_back(RecordMember(boost::trim_copy(*tokIt),
+					VarcharType::Get(ctxt, true)));
+	}	
       } else if (it->equals("port")) {
 	int32_t tmp = getInt32Value(ctxt, *it);
 	if (tmp < 0 || tmp > std::numeric_limits<unsigned short>::max()) {
@@ -866,6 +1091,10 @@ void LogicalHttpRead::check(PlanCheckContext& ctxt)
 	} else {
 	  mPort = (unsigned short) tmp;
 	}
+      } else if (it->equals("postresource")) {
+	mPostResource = getStringValue(ctxt, *it);
+      } else if (it->equals("aliveresource")) {
+	mAliveResource = getStringValue(ctxt, *it);
       } else {
 	checkDefaultParam(*it);
       }
@@ -878,68 +1107,15 @@ void LogicalHttpRead::check(PlanCheckContext& ctxt)
   // How much parsing do we do and how much do we punt.
   // Can we integrate regex to facilitate parsing query strings?
   // How about cookies?
-  std::vector<RecordMember> members;
-  members.push_back(RecordMember("Content-Length", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("User-Agent", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("Content-Type", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("RequestUrl", VarcharType::Get(ctxt, true))); 
-  members.push_back(RecordMember("body", VarcharType::Get(ctxt, true)));
-
-  // Query string parameters of interest from Ghost
-  members.push_back(RecordMember("v", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("c", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("url", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("cip", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("eb", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("ev", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("ed", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("ct", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("country", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("regional_info", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("city", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("lat", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("long", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("continent", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("throughput", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("bw", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("asnum", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("network", VarcharType::Get(ctxt, true)));
-  members.push_back(RecordMember("network_type", VarcharType::Get(ctxt, true)));
-  
-  // members.push_back(RecordMember("dE", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("cS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("cE", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("rqS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("rsS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("rsE", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("sS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("dl", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("di", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("dlS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("dlE", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("dc", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("leS", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("leE", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("to", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("ol", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("cr", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("mt", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("mb", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("b", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("u", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("ua", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("pl", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("us", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("gh", VarcharType::Get(ctxt, true)));
-  // members.push_back(RecordMember("t", VarcharType::Get(ctxt, true)));
-
   getOutput(0)->setRecordType(RecordType::get(ctxt, members));
 }
 
 void LogicalHttpRead::create(class RuntimePlanBuilder& plan)
 {
-  RuntimeOperatorType * opType = new HttpReadOperatorType(mPort, 
-							 getOutput(0)->getRecordType());
+  RuntimeOperatorType * opType = new HttpReadOperatorType(mPort,
+							  mPostResource,
+							  mAliveResource,
+							  getOutput(0)->getRecordType());
   plan.addOperatorType(opType);
   plan.mapOutputPort(this, 0, opType, 0);    
 }

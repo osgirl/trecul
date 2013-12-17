@@ -8,6 +8,8 @@ class LogicalHttpRead : public LogicalOperator
 {
 private:
   unsigned short mPort;
+  std::string mPostResource;
+  std::string mAliveResource;
 public:
   LogicalHttpRead();
   ~LogicalHttpRead();
@@ -28,6 +30,8 @@ private:
   FieldAddress mUrl;
   FieldAddress mBody;
   std::map<std::string, FieldAddress> mNVP;
+  RecordTypeMalloc mMalloc;
+  RecordTypeFree mFree;
   // Serialization
   friend class boost::serialization::access;
   template <class Archive>
@@ -39,6 +43,8 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mUrl);
     ar & BOOST_SERIALIZATION_NVP(mBody);
     ar & BOOST_SERIALIZATION_NVP(mNVP);
+    ar & BOOST_SERIALIZATION_NVP(mMalloc);
+    ar & BOOST_SERIALIZATION_NVP(mFree);
   }
 
   void appendVarchar(const char * start, const char * end,
@@ -47,7 +53,7 @@ public:
   HttpRequestType();
   HttpRequestType(const RecordType * ty);
   ~HttpRequestType();
-  void setContentLength(int64_t contentLenth, RecordBuffer buf) const;
+  void setContentLength(int64_t contentLenth, RecordBuffer buf) const;  
   void appendUserAgent(const char * start, const char * end, 
 		       RecordBuffer buf) const;
   void appendContentType(const char * start, const char * end, 
@@ -59,6 +65,9 @@ public:
   bool hasField(const std::string& field) const;
   void setField(const std::string& field, const std::string& value,
 		RecordBuffer buf) const;
+  const char * getUrl(RecordBuffer buf) const;
+  RecordBuffer malloc() const;
+  void free(RecordBuffer buf) const;
 };
 
 class HttpReadOperatorType : public RuntimeOperatorType
@@ -77,6 +86,11 @@ private:
   // OK: it's time to admit it; the motivation for building this
   // operator in the parallel execution case is pretty weak!!!!
   unsigned short mPort;
+  // We process POST requests against this
+  std::string mPostResource;
+  // A place for liveness queries
+  std::string mAliveResource;
+
   // Serialization
   friend class boost::serialization::access;
   template <class Archive>
@@ -87,6 +101,8 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mFree);
     ar & BOOST_SERIALIZATION_NVP(mRequestType);
     ar & BOOST_SERIALIZATION_NVP(mPort);
+    ar & BOOST_SERIALIZATION_NVP(mPostResource);
+    ar & BOOST_SERIALIZATION_NVP(mAliveResource);
   }
   HttpReadOperatorType()
   {
@@ -94,13 +110,17 @@ private:
 
 public:
   HttpReadOperatorType(int32_t port, 
-		      const RecordType * output)
+		       const std::string& postResource,
+		       const std::string& aliveResource,
+		       const RecordType * output)
     :
     RuntimeOperatorType("HttpReadOperatorType"),
     mMalloc(output->getMalloc()),
     mFree(output->getFree()),
     mRequestType(output),
-    mPort(port)
+    mPort(port),
+    mPostResource(postResource),
+    mAliveResource(aliveResource)
   {
   }
 

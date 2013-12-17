@@ -612,7 +612,8 @@ LogicalFileWrite::LogicalFileWrite()
   :
   mMode("binary"),
   mFileNameExpr(NULL),
-  mMaxRecords(0)
+  mMaxRecords(0),
+  mMaxSeconds(0)
 {
 }
 
@@ -644,6 +645,10 @@ void LogicalFileWrite::buildHeader(bool isFormatHeader)
 void LogicalFileWrite::checkPath(PlanCheckContext& ctxt, 
 				 const std::string& path)
 {
+  // Don't worry about existing of output path in the
+  // streaming case.
+  if (isStreamingWrite()) return;
+
   UriPtr uri = boost::make_shared<URI>(path.c_str());
   if (boost::algorithm::iequals(uri->getScheme(), "hdfs")) {
     FileSystem * fs = FileSystem::get(uri);
@@ -652,6 +657,30 @@ void LogicalFileWrite::checkPath(PlanCheckContext& ctxt,
 			    path).str());
     }
   }
+}
+
+bool LogicalFileWrite::isStreamingWrite() const
+{
+  return mMaxSeconds > 0 || mMaxRecords > 0;
+}
+
+FileCreationPolicy * LogicalFileWrite::getCreationPolicy(UriPtr uri) const
+{
+  if (isStreamingWrite()) {
+    return new StreamingFileCreationPolicy(uri->getPath(), (std::size_t) mMaxSeconds, (std::size_t) mMaxRecords);
+  } else {
+    return new MultiFileCreationPolicy(mConnect.size() ? "" : uri->getPath(),
+				       mFileNameExpr);
+  }
+}
+
+WritableFileFactory * LogicalFileWrite::getFileFactory(UriPtr uri) const
+{
+  if (boost::algorithm::iequals(uri->getScheme(), "hdfs")) {
+    return new HdfsWritableFileFactory(uri);
+  } else {
+    return new LocalWritableFileFactory(uri);
+  } 
 }
 
 void LogicalFileWrite::check(PlanCheckContext& ctxt)
@@ -676,6 +705,8 @@ void LogicalFileWrite::check(PlanCheckContext& ctxt)
       mHeaderFile = getStringValue(ctxt, *it);
     } else if (it->equals("maxrecords")) {
       mMaxRecords = getInt32Value(ctxt, *it);
+    } else if (it->equals("maxseconds")) {
+      mMaxSeconds = getInt32Value(ctxt, *it);
     } else if (it->equals("mode")) {
       mMode = getStringValue(ctxt, *it);
     } else {
@@ -702,22 +733,20 @@ void LogicalFileWrite::create(class RuntimePlanBuilder& plan)
 {
   UriPtr uri = URI::get(mConnect.size() ? mConnect.c_str() : mFile.c_str());
   RuntimeOperatorType * opType = NULL;
-  if (boost::algorithm::iequals(uri->getScheme(), "hdfs")) {
-    FileCreationPolicy * fcp = mMaxRecords > 0 ?
-      static_cast<FileCreationPolicy*>(new StreamingFileCreationPolicy(uri->getPath(), 0, (std::size_t) mMaxRecords)) :
-      static_cast<FileCreationPolicy*>(new MultiFileCreationPolicy(mConnect.size() ? "" : uri->getPath(),
-								   mFileNameExpr));
+  if (isStreamingWrite() ||
+      boost::algorithm::iequals(uri->getScheme(), "hdfs")) {
     opType = new RuntimeHdfsWriteOperatorType("write",
 					      getInput(0)->getRecordType(),
-					      new HdfsWritableFileFactory(uri),
+					      getFileFactory(uri),
 					      mHeader,
 					      mHeaderFile,
-					      fcp);
+					      getCreationPolicy(uri));
   } else if (boost::algorithm::iequals("binary", mMode)) {
     opType = new InternalFileWriteOperatorType("write",
 					       getInput(0)->getRecordType(),
 					       uri->getPath());
   } else {
+    // TODO: The HdfsWriteOperatorType should replace this 
     opType = new RuntimeWriteOperatorType("write",
 					  getInput(0)->getRecordType(),
 					  uri->getPath(),

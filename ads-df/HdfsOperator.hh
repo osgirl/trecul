@@ -201,7 +201,8 @@ private:
   }
 public:
   virtual ~FileCreationPolicy() {}
-  virtual class FileCreation * create(int32_t partition) const=0;
+  virtual bool requiresServiceCompletionPort() const=0;
+  virtual class FileCreation * create(RuntimeOperator::Services& services) const=0;
 };
 
 class MultiFileCreationPolicy : public FileCreationPolicy
@@ -232,7 +233,8 @@ public:
   MultiFileCreationPolicy(const std::string& hdfsFile,
 			  const RecordTypeTransfer * argTransfer);
   ~MultiFileCreationPolicy();
-  class FileCreation * create(int32_t partition) const;
+  bool requiresServiceCompletionPort() const { return false; }
+  class FileCreation * create(RuntimeOperator::Services& services) const;
 };
 
 /**
@@ -278,7 +280,8 @@ public:
 			      std::size_t fileSeconds=0,
 			      std::size_t fileRecords=0);
   ~StreamingFileCreationPolicy();
-  class FileCreation * create(int32_t partition) const;
+  bool requiresServiceCompletionPort() const { return true; }
+  class FileCreation * create(RuntimeOperator::Services& services) const;
 };
 
 class RuntimeHdfsWriteOperatorType : public RuntimeOperatorType
@@ -319,6 +322,7 @@ public:
 			       const std::string& headerFile,
 			       FileCreationPolicy * creationPolicy);
   ~RuntimeHdfsWriteOperatorType();
+  int32_t numServiceCompletionPorts() const;
   RuntimeOperator * create(RuntimeOperator::Services& services) const;
 };
 

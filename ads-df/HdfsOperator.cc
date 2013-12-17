@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <boost/asio.hpp>
 #include <boost/bind.hpp>
 #include <boost/thread.hpp>
 #include <boost/lexical_cast.hpp>
@@ -44,6 +45,7 @@
 #include "Pipes.hh"
 #include "HdfsOperator.hh"
 #include "RecordParser.hh"
+#include "RuntimeProcess.hh"
 
 typedef boost::shared_ptr<class HdfsFileSystem> HdfsFileSystemPtr;
 typedef boost::shared_ptr<class HdfsFileSystemImpl> HdfsFileSystemImplPtr;
@@ -1199,6 +1201,9 @@ public:
 			class RuntimeHdfsWriteOperator * fileFactory)=0;
   virtual void close(bool flush)=0;
   virtual void commit(std::string& err)=0;
+  virtual void setCompletionPort(ServiceCompletionFifo * f)
+  {
+  }
 };
 
 /**
@@ -1225,7 +1230,7 @@ private:
   }
 public:
   MultiFileCreation(const MultiFileCreationPolicy& policy, 
-		    int32_t partition);
+		    RuntimeOperator::Services& services);
   ~MultiFileCreation();
   void start(FileSystem * genericFileSystem, PathPtr rootUri,
 	     class RuntimeHdfsWriteOperator * fileFactory);
@@ -1242,12 +1247,22 @@ private:
   PathPtr mRootUri;
   FileSystem * mGenericFileSystem;
   std::size_t mNumRecords;
+  boost::asio::deadline_timer mTimer;
+  ServiceCompletionFifo * mCompletionPort;
+  // Path of current file as we are writing to it
+  PathPtr mTempPath;
+  // Final path name of file.
+  PathPtr mFinalPath;
   OutputFile * mCurrentFile;
 
   OutputFile * createFile(const std::string& filePath,
 			  RuntimeHdfsWriteOperator * factory);
+
+  // Timer callback
+  void timeout(const boost::system::error_code& err);
 public:
-  StreamingFileCreation(const StreamingFileCreationPolicy& policy);
+  StreamingFileCreation(const StreamingFileCreationPolicy& policy,
+			RuntimeOperator::Services& services);
   ~StreamingFileCreation();
   void start(FileSystem * genericFileSystem, PathPtr rootUri,
 	     class RuntimeHdfsWriteOperator * fileFactory);
@@ -1255,6 +1270,10 @@ public:
 			class RuntimeHdfsWriteOperator * fileFactory);
   void close(bool flush);
   void commit(std::string& err);
+  virtual void setCompletionPort(ServiceCompletionFifo * f)
+  {
+    mCompletionPort = f;
+  }
 };
 
 class RuntimeHdfsWriteOperator : public RuntimeOperatorBase<RuntimeHdfsWriteOperatorType>
@@ -1330,19 +1349,19 @@ MultiFileCreationPolicy::~MultiFileCreationPolicy()
   delete mTransferOutput;
 }
 
-FileCreation * MultiFileCreationPolicy::create(int32_t partition) const
+FileCreation * MultiFileCreationPolicy::create(RuntimeOperator::Services& services) const
 {
-  return new MultiFileCreation(*this, partition);
+  return new MultiFileCreation(*this, services);
 }
 
 MultiFileCreation::MultiFileCreation(const MultiFileCreationPolicy& policy,
-				     int32_t partition)
+				     RuntimeOperator::Services& services)
   :
   mPolicy(policy),
   mGenericFileSystem(NULL),
   mRuntimeContext(NULL),
   mCommitter(NULL),
-  mPartition(partition)
+  mPartition(services.getPartition())
 {
   if (NULL != policy.mTransfer) {
     mRuntimeContext = new InterpreterContext();
@@ -1469,22 +1488,34 @@ StreamingFileCreationPolicy::~StreamingFileCreationPolicy()
 {
 }
 
-FileCreation * StreamingFileCreationPolicy::create(int32_t partition) const
+FileCreation * StreamingFileCreationPolicy::create(RuntimeOperator::Services& services) const
 {
-  return new StreamingFileCreation(*this);
+  return new StreamingFileCreation(*this, services);
 }
 
-StreamingFileCreation::StreamingFileCreation(const StreamingFileCreationPolicy& policy)
+StreamingFileCreation::StreamingFileCreation(const StreamingFileCreationPolicy& policy,
+					     RuntimeOperator::Services& services)
   :
   mPolicy(policy),
   mGenericFileSystem(NULL),
   mNumRecords(0),
-  mCurrentFile(NULL)
+  mCurrentFile(NULL),
+  mTimer(services.getIOService()),
+  mCompletionPort(NULL)
 {
 }
 
 StreamingFileCreation::~StreamingFileCreation()
 {
+}
+
+void StreamingFileCreation::timeout(const boost::system::error_code& err)
+{
+  // Post to operator completion port.
+  if(err != boost::asio::error::operation_aborted) {
+    RecordBuffer buf;
+    mCompletionPort->write(buf);
+  }
 }
 
 OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
@@ -1494,6 +1525,7 @@ OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
   if (mCurrentFile != NULL) {
     return mCurrentFile;
   }
+
   // We create a temporary file name and write to that.  
   // Here we are not using a block placement naming scheme 
   // since we are likely executing on a single partition at this point.
@@ -1502,10 +1534,21 @@ OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
   std::string tmpStr = FileSystem::getTempFileName();
 
   std::stringstream str;
-  str << filePath << "/" << tmpStr << ".gz";
-  PathPtr tempPath = Path::get(mRootUri, str.str());
+  str << filePath << "/" << tmpStr << ".tmp";
+  mTempPath = Path::get(mRootUri, str.str());
+  std::stringstream finalStr;
+  finalStr << filePath << "/" << tmpStr << ".gz";
+  mFinalPath = Path::get(mRootUri, finalStr.str());
   // Call back to the factory to actually create the file
-  mCurrentFile = factory->createFile(tempPath);
+  mCurrentFile = factory->createFile(mTempPath);
+  
+  if (mPolicy.mFileSeconds > 0) {
+    mTimer.expires_from_now(boost::posix_time::seconds(mPolicy.mFileSeconds));
+    mTimer.async_wait(boost::bind(&StreamingFileCreation::timeout, 
+				  this,
+				  boost::asio::placeholders::error));
+  }
+
   return mCurrentFile;
 }
 
@@ -1515,17 +1558,21 @@ void StreamingFileCreation::start(FileSystem * genericFileSystem,
 {
   mGenericFileSystem = genericFileSystem;
   mRootUri = rootUri;
-  createFile(mPolicy.mBaseDir, factory);
 }
 
 OutputFile * StreamingFileCreation::onRecord(RecordBuffer input,
 					     RuntimeHdfsWriteOperator * factory)
 {
-  if (0 != mPolicy.mFileRecords && 
-      mPolicy.mFileRecords <= mNumRecords++) {
+  if ((0 != mPolicy.mFileRecords && 
+       mPolicy.mFileRecords <= mNumRecords) ||
+      (0 != mPolicy.mFileSeconds &&
+       RecordBuffer() == input)) {
     close(true);
-    createFile(mPolicy.mBaseDir, factory);
     mNumRecords = 0;
+  }
+  if (mCurrentFile == NULL && input != RecordBuffer()) {
+    createFile(mPolicy.mBaseDir, factory);
+    mNumRecords += 1;
   }
   return mCurrentFile;
 }
@@ -1539,8 +1586,19 @@ void StreamingFileCreation::close(bool flush)
     mCurrentFile->close();
     delete mCurrentFile;
     mCurrentFile = NULL;
-    // TODO: Put the file in its final place; don't wait for commit
+    if (flush && NULL != mTempPath.get() && 
+	NULL != mFinalPath.get()) {
+      // Put the file in its final place; don't wait for commit
+      mGenericFileSystem->rename(mTempPath, mFinalPath);
+      // TODO: Error!!!!  Queue this up for a retry.
+      mTempPath = mFinalPath = PathPtr();
+    }
     // Delete any file on unclean shutdown...
+    if (mPolicy.mFileSeconds > 0) {
+      // May not be necessary if we closing a file as a result
+      // of a timeout
+      mTimer.cancel();
+    }
   }
 }
 
@@ -1558,7 +1616,7 @@ RuntimeHdfsWriteOperator::RuntimeHdfsWriteOperator(RuntimeOperator::Services& se
   mWriter(*this),
   mWriterThread(NULL),
   mCommitter(NULL),
-  mCreationPolicy(opType.mCreationPolicy->create(getPartition()))
+  mCreationPolicy(opType.mCreationPolicy->create(services))
 {
 }
 
@@ -1599,6 +1657,9 @@ void RuntimeHdfsWriteOperator::start()
 {
   WritableFileFactory * ff = getMyOperatorType().mFileFactory;
   mRootUri = ff->getFileSystem()->getRoot();
+  if (getMyOperatorType().mCreationPolicy->requiresServiceCompletionPort()) {
+    mCreationPolicy->setCompletionPort(&(dynamic_cast<ServiceCompletionPort*>(getCompletionPorts()[0])->getFifo()));
+  }
   mCreationPolicy->start(ff->getFileSystem(), mRootUri, this);
 
   if (hasHeaderFile()) {
@@ -1664,13 +1725,19 @@ void RuntimeHdfsWriteOperator::onEvent(RuntimePort * port)
   switch(mState) {
   case START:
     while(true) {
-      requestRead(0);
+      if (getCompletionPorts().size()) {
+	getCompletionPorts()[0]->request_unlink();
+	getCompletionPorts()[0]->request_link_after(*getInputPorts()[0]);
+	requestRead(*getCompletionPorts()[0]);
+      } else {
+	requestRead(0);
+      }
       mState = READ;
       return;
     case READ:
-      {
-	RecordBuffer input;
-	read(port, input);
+      RecordBuffer input;
+      read(port, input);
+      if (port == getInputPorts()[0]) {
 	bool isEOS = RecordBuffer::isEOS(input);
 	writeToHdfs(input, isEOS);
 	// mWriter.enqueue(input);
@@ -1693,6 +1760,9 @@ void RuntimeHdfsWriteOperator::onEvent(RuntimePort * port)
 	  renameTempFile();
 	  break;
 	}
+      } else {
+	BOOST_ASSERT(port == getCompletionPorts()[0]);
+	mCreationPolicy->onRecord(RecordBuffer(), this);
       }
     }
   }
@@ -1727,6 +1797,11 @@ RuntimeHdfsWriteOperatorType::~RuntimeHdfsWriteOperatorType()
 {
   delete mFileFactory;
   delete mCreationPolicy;
+}
+
+int32_t RuntimeHdfsWriteOperatorType::numServiceCompletionPorts() const
+{
+  return mCreationPolicy->requiresServiceCompletionPort() ? 1 : 0;
 }
 
 RuntimeOperator * RuntimeHdfsWriteOperatorType::create(RuntimeOperator::Services& services) const

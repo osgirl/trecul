@@ -52,7 +52,7 @@ QueueImport.cc
 RecordParser.cc 
 RuntimeOperator.cc 
 RuntimePlan.cc 
-RuntimeProcess.cc
+RuntimeProcess.cc 
 StreamBufferBlock.cc
 TableMetadata.cc
 TableOperator.cc
