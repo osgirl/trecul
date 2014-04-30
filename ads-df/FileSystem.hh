@@ -101,6 +101,8 @@ private:
   int32_t mPort;
   std::string mFile;
 
+  // Initialize either creating or resolving references
+  void initRef(const URI& a, const URI& b, bool isResolve);
   void init(struct UriUriStructA * uri);
 
   // Serialization
@@ -117,10 +119,12 @@ private:
   URI()
   {
   }  
+
 public:
   static UriPtr get(const char * filename);
   URI(const char * filename) ;
   URI(const URI& parent, const URI& child);
+  URI(const URI& parent, const URI& child, bool isResolve);
   ~URI();
 
   const std::string & getScheme() const { return mScheme; }
@@ -142,7 +146,7 @@ private:
   UriPtr mUri;
   Path(const std::string& str);
   Path(UriPtr uri);
-  Path(PathPtr parent, PathPtr child);
+  Path(PathPtr parent, PathPtr child, bool isResolve);
   // Serialization
   friend class boost::serialization::access;
   template <class Archive>
@@ -161,6 +165,8 @@ public:
 		     const std::string& child);
   static PathPtr get(const std::string& parent,
 		     const std::string& child);
+  static PathPtr resolveReference(PathPtr parent, PathPtr child);
+  static PathPtr createReference(PathPtr parent, PathPtr child);
 
   UriPtr getUri() const { return mUri; }
   const std::string& toString() const;
@@ -285,10 +291,6 @@ public:
    * Rename a file from/to
    */
   virtual bool rename(PathPtr from, PathPtr to) =0;
-
-  /**
-   * Open a file for writing
-   */
 };
 
 /**
@@ -360,6 +362,7 @@ public:
   virtual ~WritableFileFactory() {}
   virtual FileSystem * getFileSystem() =0;
   virtual WritableFile * openForWrite(PathPtr p) =0;
+  virtual bool mkdir(PathPtr p) =0;
 };
 
 class LocalWritableFileFactory : public WritableFileFactory
@@ -393,6 +396,7 @@ public:
   ~LocalWritableFileFactory();
   FileSystem * getFileSystem();
   WritableFile * openForWrite(PathPtr p);
+  bool mkdir(PathPtr p);
 };
 
 /**

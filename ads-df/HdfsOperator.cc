@@ -133,7 +133,6 @@ public:
   }
   hdfsFile open_for_read(PathPtr p)
   {
-    p = transformDefaultUri(p);    
     hdfsFile f = ::hdfsOpenFile(mFileSystem, 
 				p->getUri()->getPath().c_str(), 
 				O_RDONLY,
@@ -154,7 +153,6 @@ public:
 			 int32_t replicationFactor,
 			 int32_t blockSize)
   {
-    p = transformDefaultUri(p);
     hdfsFile f = ::hdfsOpenFile(mFileSystem, 
 				p->getUri()->getPath().c_str(),
 				O_WRONLY|O_CREAT,
@@ -173,6 +171,12 @@ public:
     //   blockSize << ")" << std::endl;
 
     return f;
+  }
+  bool mkdir(PathPtr p)
+  {
+    int ret = ::hdfsCreateDirectory(mFileSystem, 
+				    p->getUri()->getPath().c_str());
+    return ret == 0;
   }
 };
 
@@ -208,6 +212,9 @@ PathPtr HdfsFileSystemImpl::transformDefaultUri(PathPtr p)
   if (boost::algorithm::equals("default", uri->getHost()) &&
       0 == uri->getPort()) {
     hdfsFileInfo * info = hdfsGetPathInfo(mFileSystem, "/");
+    if (info == NULL) {
+      return PathPtr();
+    }
     std::string baseUri(info->mName);
     if(uri->getPath().size() > 1)
       baseUri += uri->getPath().substr(1);
@@ -248,6 +255,9 @@ boost::shared_ptr<FileStatus> HdfsFileSystemImpl::createFileStatus(hdfsFileInfo&
 boost::shared_ptr<FileStatus> HdfsFileSystemImpl::getStatus(PathPtr p)
 {
   p = transformDefaultUri(p);
+  if (p == PathPtr()) {
+    return boost::shared_ptr<FileStatus>();
+  }
   hdfsFileInfo * fileInfo = ::hdfsGetPathInfo(mFileSystem, 
 					      p->toString().c_str());
   if (fileInfo == NULL) {
@@ -262,6 +272,9 @@ boost::shared_ptr<FileStatus> HdfsFileSystemImpl::getStatus(PathPtr p)
 bool HdfsFileSystemImpl::exists(PathPtr p)
 {
   p = transformDefaultUri(p);
+  if (p == PathPtr()) {
+    return false;
+  }
   hdfsFileInfo * fileInfo = ::hdfsGetPathInfo(mFileSystem, 
 					      p->toString().c_str());
   if (fileInfo != NULL) {
@@ -275,6 +288,9 @@ bool HdfsFileSystemImpl::exists(PathPtr p)
 bool HdfsFileSystemImpl::removeAll(PathPtr p)
 {
   p = transformDefaultUri(p);
+  if (p == PathPtr()) {
+    return true;
+  }
   int ret = ::hdfsDelete(mFileSystem, p->toString().c_str(), 1);	    
   return ret==0;
 }
@@ -282,6 +298,9 @@ bool HdfsFileSystemImpl::removeAll(PathPtr p)
 bool HdfsFileSystemImpl::remove(PathPtr p)
 {
   p = transformDefaultUri(p);
+  if (p == PathPtr()) {
+    return true;
+  }
   int ret = ::hdfsDelete(mFileSystem, p->toString().c_str(), 0);	    
   return ret==0;
 }
@@ -291,6 +310,9 @@ void HdfsFileSystemImpl::list(PathPtr p,
 {
   int numEntries=-1;
   p = transformDefaultUri(p);
+  if (p == PathPtr()) {
+    return;
+  }
   hdfsFileInfo * tmp = ::hdfsListDirectory(mFileSystem, 
 					   p->toString().c_str(), 
 					   &numEntries);
@@ -512,9 +534,14 @@ FileSystem * HdfsWritableFileFactory::getFileSystem()
 WritableFile * HdfsWritableFileFactory::openForWrite(PathPtr p)
 {
   hdfsFile f = mFileSystem->mImpl->open_for_write(p, mBufferSize, 
-						   mReplicationFactor, 
-						   mBlockSize);
+						  mReplicationFactor, 
+						  mBlockSize);
   return new HdfsWritableFile(mFileSystem->mImpl, f);
+}
+
+bool HdfsWritableFileFactory::mkdir(PathPtr p)
+{
+  return mFileSystem->mImpl->mkdir(p);
 }
 
 static bool canBeSplit(boost::shared_ptr<FileStatus> file)
@@ -1522,9 +1549,6 @@ OutputFile * StreamingFileCreation::createFile(const std::string& filePath,
 					       RuntimeHdfsWriteOperator * factory)
 {
   BOOST_ASSERT(mCurrentFile == NULL);
-  if (mCurrentFile != NULL) {
-    return mCurrentFile;
-  }
 
   // We create a temporary file name and write to that.  
   // Here we are not using a block placement naming scheme 
@@ -1568,10 +1592,12 @@ OutputFile * StreamingFileCreation::onRecord(RecordBuffer input,
       (0 != mPolicy.mFileSeconds &&
        RecordBuffer() == input)) {
     close(true);
-    mNumRecords = 0;
   }
-  if (mCurrentFile == NULL && input != RecordBuffer()) {
-    createFile(mPolicy.mBaseDir, factory);
+  // Check if we have an input to record
+  if (input != RecordBuffer()) {
+    // Check if we have an open file
+    if (mCurrentFile == NULL)
+      createFile(mPolicy.mBaseDir, factory);
     mNumRecords += 1;
   }
   return mCurrentFile;
@@ -1586,6 +1612,7 @@ void StreamingFileCreation::close(bool flush)
     mCurrentFile->close();
     delete mCurrentFile;
     mCurrentFile = NULL;
+    mNumRecords = 0;
     if (flush && NULL != mTempPath.get() && 
 	NULL != mFinalPath.get()) {
       // Put the file in its final place; don't wait for commit

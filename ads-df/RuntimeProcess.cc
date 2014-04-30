@@ -775,6 +775,8 @@ private:
   std::string mLocalPipesChecksum;
   AdsDfSpeculativeExecution mSpeculative;
   int32_t mTaskTimeout;
+  bool mNeedHdfsJobDir;
+
 
   /**
    * Name of pipes executable in HDFS.  It goes into the
@@ -829,7 +831,8 @@ AdsPipesJobConf::AdsPipesJobConf(const std::string& jobDir)
   mJobDir(jobDir),
   mNumReducers(0),
   mJvmReuse(true),
-  mTaskTimeout(DEFAULT_TASK_TIMEOUT)
+  mTaskTimeout(DEFAULT_TASK_TIMEOUT),
+  mNeedHdfsJobDir(false)
 {
   // We assume that ads-df-pipes is in the same directory
   // as this exe
@@ -845,12 +848,14 @@ AdsPipesJobConf::AdsPipesJobConf(const std::string& jobDir)
 void AdsPipesJobConf::setMapper(const std::string& m)
 {
   mMapper = m;
+  mNeedHdfsJobDir = true;
 }
 
 void AdsPipesJobConf::setReducer(const std::string& r, int32_t numReducers)
 {
   mReducer = r;
   mNumReducers = numReducers;
+  mNeedHdfsJobDir = true;
 }
 
 void AdsPipesJobConf::setName(const std::string& name)
@@ -906,18 +911,25 @@ std::string AdsPipesJobConf::get() const
 			      "    <value>0.5</value>\n"
 			      "  </property>\n"
 			      "  <property>\n"
-			      "    <name>mapreduce.map.speculative</name>\n"
+			      "    <name>mapred.map.tasks.speculative.execution</name>\n"
 			      "    <value>%3%</value>\n"
 			      "  </property>\n"
 			      "  <property>\n"
-			      "    <name>mapreduce.reduce.speculative</name>\n"
+			      "    <name>mapred.reduce.tasks.speculative.execution</name>\n"
 			      "    <value>%4%</value>\n"
 			      "  </property>\n"
 			      "  <property>\n"
-			      "    <name>mapreduce.task.timeout</name>\n"
+			      "    <name>mapred.task.timeout</name>\n"
 			      "    <value>%5%</value>\n"
 			      "  </property>\n"
 			      );
+
+  boost::format ldLibPath(
+			  "  <property>\n"
+			  "    <name>mapred.child.env</name>\n"
+			  "    <value>LD_LIBRARY_PATH=%1%</value>\n"
+			  "  </property>\n"
+			  );
   boost::format mapperFormat(
 			     "  <property>\n"
 			     "    <name>com.akamai.ads.dataflow.mapper.plan</name>\n"
@@ -944,7 +956,7 @@ std::string AdsPipesJobConf::get() const
 			);
   boost::format jobQueue(
 			 "  <property>\n"
-			 "     <name>mapreduce.job.queuename</name>\n"
+			 "     <name>mapred.job.queue.name</name>\n"
 			 "     <value>%1%</value>\n"
 			 "  </property>\n"
 			 );
@@ -963,14 +975,14 @@ std::string AdsPipesJobConf::get() const
   // distributed cache API (which pipes doesn't provide).
   boost::format distCacheFormat(
 			     "  <property>\n"
-			     "    <name>mapreduce.job.cache.files</name>\n"
+			     "    <name>mapred.cache.files</name>\n"
 			     "    <value>%1%</value>\n"
 			     "  </property>\n"
 			     "  <property>\n"
-			     "    <name>mapreduce.job.cache.symlink.create</name>\n"
+			     "    <name>mapred.create.symlink</name>\n"
 			     "    <value>yes</value>\n"
 			     "  </property>\n"
-				);
+			     );
 
   std::string closeBoilerPlate(
 			       "</configuration>\n"
@@ -979,18 +991,22 @@ std::string AdsPipesJobConf::get() const
 
   std::string jvmReuseProperty(mJvmReuse ?
 			       "  <property>\n"
-			       "    <name>mapreduce.job.jvm.numtasks</name>\n"
+			       "    <name>mapred.job.reuse.jvm.num.tasks</name>\n"
 			       "    <value>-1</value>\n"
 			       "  </property>\n" :			       
 			       "  <property>\n"
-			       "    <name>mapreduce.job.jvm.numtasks</name>\n"
+			       "    <name>mapred.job.reuse.jvm.num.tasks</name>\n"
 			       "    <value>1</value>\n"
 			       "  </property>\n" 
 			       );
-
   std::string ret = (openBoilerPlateFormat % getPipesExecutableName() % jvmReuseProperty %
 		     mSpeculative.isMapEnabledString() % mSpeculative.isReduceEnabledString() %
-		     mTaskTimeout).str();
+		     mTaskTimeout ).str();
+
+  if (getenv("LD_LIBRARY_PATH")) {
+    ret += (ldLibPath % getenv("LD_LIBRARY_PATH")).str();
+  } 
+
   std::string distCacheFiles;
   ret += (jobName % mName).str();
   if (mJobQueue.size()) {
@@ -1091,7 +1107,20 @@ void AdsPipesJobConf::copyPipesExecutableToHDFS()
 
 void AdsPipesJobConf::copyFilesToHDFS()
 {
+  HdfsFileSystem fs ("hdfs://default:0");
+  PathPtr jobsDirUri (Path::get(fs.getRoot(), mJobDir + "/plans/"));
+
   copyPipesExecutableToHDFS();
+  
+  if( mNeedHdfsJobDir && ! fs.exists(jobsDirUri) ) {
+    HdfsWritableFileFactory *factory = new HdfsWritableFileFactory(jobsDirUri->getUri());
+    PathPtr createDir (Path::get(mJobDir + "/plans/"));
+    if( ! factory->mkdir(createDir) ) {
+      throw std::runtime_error("Failed to create job dir in HDFS");
+    }
+    delete factory;
+  }
+
   if (mMapper.size()) {
     copyPlanFileToHDFS(mMapper, getMapPlanFileName());
   }
@@ -1314,6 +1343,10 @@ int PlanRunner::runMapReduceJob(const std::string& mapProgram,
 
 GdbStackTrace::GdbStackTrace()
 {
+}
+
+void GdbStackTrace::init()
+{
   // Find gdb64 or gdb
   std::string gdb64("/usr/bin/gdb64");
   std::string gdb("/usr/bin/gdb");
@@ -1367,6 +1400,7 @@ static void onSigsegv(int )
 int PlanRunner::run(int argc, char ** argv)
 {
   // Install signal handlers
+  st.init();
   struct sigaction action;
   action.sa_flags = SA_RESTART;
   sigemptyset(&action.sa_mask);
@@ -1642,10 +1676,16 @@ void PosixProcessFactory::create(const std::vector<init_type>& initializers)
 
 int32_t PosixProcessFactory::waitForCompletion(boost::system::error_code & ec)
 {
+  return waitForCompletion(mPid, ec);
+}
+
+int32_t PosixProcessFactory::waitForCompletion(PosixProcessFactory::pid_type pid,
+					       boost::system::error_code & ec)
+{
   do {
     int status;
-    int err = ::waitpid(mPid, &status, 0);
-    if (err == mPid) {
+    int err = ::waitpid(pid, &status, 0);
+    if (err == pid) {
       if (WIFEXITED(status)) {
 	ec.clear();
 	return WEXITSTATUS(status);
@@ -1712,6 +1752,11 @@ void PosixPath::onPreForkParent(PosixProcessFactory& parent)
 {
   parent.mExe = mPath;
   parent.mArgs.setExe(&mPathChars[0]);
+}
+
+void PosixPath::onFailedExecChild(PosixProcessFactory& parent)
+{
+  ::exit(-100);
 }
 
 PosixArgument::PosixArgument(const std::string& arg)

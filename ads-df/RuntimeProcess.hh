@@ -604,6 +604,8 @@ public:
    * Returns the 256+signal number of a process that was terminated.
    * Returns -1 and sets ec if there is an error waiting.
    */
+  static int32_t waitForCompletion(pid_type pid, 
+				   boost::system::error_code & ec);
   int32_t waitForCompletion(boost::system::error_code & ec);
   int32_t waitForCompletion();
   void kill(int32_t signal_number,
@@ -622,6 +624,7 @@ private:
 public:
   PosixPath(const boost::filesystem::path& exe);
   void onPreForkParent(PosixProcessFactory& parent);
+  void onFailedExecChild(PosixProcessFactory& parent);
 };
 
 class PosixArgument : public PosixProcessInitializer
@@ -703,6 +706,7 @@ typedef boost::shared_ptr<PosixProcessInitializer> ppiptr;
 public:
   GdbStackTrace();
   ~GdbStackTrace();
+  void init();
   int32_t generate();
 };
 

@@ -307,6 +307,9 @@ public:
 
     // Deserialize a FileSplit
     HadoopUtils::StringInStream stream(context.getInputSplit());
+    // With CDH4.2.0 (and mr1, specifically), there appears to be an extra long 
+    // at the front of the inputSplit string.  Strip it off to get to filename..  
+    int64_t extra = deserializeLong(stream);
     HadoopUtils::deserializeString(filename, stream);
     // TODO: I don't think these start/end values for the split are actually
     // coming in.  This may be a change in 0.21.0 but I am not
@@ -320,7 +323,7 @@ public:
     
     // A dataflow mapper must have a plan 
     static const char * planProperty = "com.akamai.ads.dataflow.mapper.plan";
-    static const char * numMapsProperty = "mapreduce.job.maps";
+    static const char * numMapsProperty = "mapred.map.tasks";
     const std::string& strNumPartitions(context.getJobConf()->get(numMapsProperty));
     int32_t numPartitions = boost::lexical_cast<int32_t>(strNumPartitions);    
     if (!context.getJobConf()->hasKey(planProperty)) {
@@ -337,10 +340,10 @@ public:
 
     int32_t partition = 0;
     if (hasInput(tmp)) {
-      static const char * taskPartitionProperty = "mapreduce.task.partition";
+      static const char * taskPartitionProperty = "mapred.task.partition";
       const std::string& strTaskPartition(context.getJobConf()->get(taskPartitionProperty));
       partition = boost::lexical_cast<int32_t>(strTaskPartition);    
-      std::cout << "Processing file: " << filename.c_str() << std::endl;
+      std::cout << "Processing partition: " << strTaskPartition << std::endl;
     } else {
       // Filename is an HDFS URI.  The file will have underscore delimited
       // structure and the trailing component is a 5 digit number (padded
@@ -349,6 +352,7 @@ public:
       // TODO: Should we be more demanding about the format of this 
       // file?
       // TODO: Encapsulate serial structure in to a class.
+      std::cout << "Processing file: " << filename.c_str() << std::endl;
       URI serialFile(filename.c_str());
       boost::filesystem::path fsPath(serialFile.getPath());
       typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
@@ -404,8 +408,8 @@ public:
   DataflowReduce(HadoopPipes::TaskContext& context) {
     // A dataflow mapper must have a plan 
     static const char * planProperty = "com.akamai.ads.dataflow.reducer.plan";
-    static const char * numReducesProperty = "mapreduce.job.reduces";
-    static const char * taskPartitionProperty = "mapreduce.task.partition";
+    static const char * numReducesProperty = "mapred.reduce.tasks";
+    static const char * taskPartitionProperty = "mapred.task.partition";
     
     if (!context.getJobConf()->hasKey(planProperty)) {
       throw std::runtime_error("Dataflow reduce job requires a com.akamai.ads.dataflow.reducer.plan in job configuration");
@@ -494,6 +498,7 @@ static void onSigsegv(int )
 
 int main(int argc, char *argv[]) {
   // Install signal handlers
+  st.init();
   struct sigaction action;
   action.sa_flags = SA_RESTART;
   sigemptyset(&action.sa_mask);

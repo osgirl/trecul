@@ -153,7 +153,9 @@ void RuntimeWriteOperator::start()
     mCompressor = new ZLibCompress();
   }
   // Create directories if necessary before opening file.
-  boost::filesystem::create_directories(p.parent_path());
+  if (!p.parent_path().empty()) {
+    boost::filesystem::create_directories(p.parent_path());
+  }
   mFile = ::open(getWriteType().mFile.c_str(),
 		 O_WRONLY|O_CREAT|O_TRUNC,
 		 S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP);

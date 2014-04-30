@@ -132,7 +132,22 @@ include_directories ( ${URIPARSER_INCLUDE_DIRS} )
 #
 find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
+find_library(LIB_RT rt)
 find_library(LIB_Z z)
+
+#
+# Setup CXX11 flag
+#
+if(CMAKE_COMPILER_IS_GNUCXX)
+   SET(ENABLE_CXX11 "-std=c++11")
+
+   EXECUTE_PROCESS(COMMAND "${CMAKE_CXX_COMPILER} -dumpversion" OUTPUT_VARIABLE GCC_VERSION)
+   if (GCC_VERSION VERSION_LESS 4.7)
+      SET(ENABLE_CXX11 "-std=c++0x")
+   endif()
+
+   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ENABLE_CXX11}")
+endif()
 
 ######################################################
 ######################################################

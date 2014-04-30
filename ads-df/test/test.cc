@@ -106,6 +106,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
   std::vector<RecordMember> members;
   members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
   const RecordType * recordType = RecordType::get(ctxt, members);
   std::vector<FieldImporter > importers;
   FieldImporter::createDefaultImport(recordType,
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
 				     '\\',
 				     importers);
   {
-    std::string data("82344	String data");
+    std::string data("82344	String data	THIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -126,10 +127,12 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("String data", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344	");
+    std::string data("82344		");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -140,6 +143,8 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlock)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
 }
@@ -151,6 +156,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
   std::vector<RecordMember> members;
   members.push_back(RecordMember("a", Int32Type::Get(ctxt, true)));
   members.push_back(RecordMember("b", VarcharType::Get(ctxt, true)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt, true)));
   const RecordType * recordType = RecordType::get(ctxt, members);
   std::vector<FieldImporter > importers;
   FieldImporter::createDefaultImport(recordType,
@@ -160,7 +166,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
 				     '\\',
 				     importers);
   {
-    std::string data("82344	String data");
+    std::string data("82344	String data	THIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -171,12 +177,14 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("String data", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
     // This is an important subtle test case: a file that ends with
     // an empty string in a nullable field.
-    std::string data("82344	");
+    std::string data("82344		");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -187,6 +195,8 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockNullable)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
 }
@@ -198,6 +208,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
   std::vector<RecordMember> members;
   members.push_back(RecordMember("a", Int32Type::Get(ctxt)));
   members.push_back(RecordMember("b", VarcharType::Get(ctxt)));
+  members.push_back(RecordMember("c", VarcharType::Get(ctxt)));
   const RecordType * recordType = RecordType::get(ctxt, members);
   std::vector<FieldImporter > importers;
   FieldImporter::createDefaultImport(recordType,
@@ -214,7 +225,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
 				     '%',
 				     percentImporters);
   {
-    std::string data("82344\tString data\\twith escaped tab");
+    std::string data("82344\tString data\\twith escaped tab\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -225,10 +236,12 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("String data\twith escaped tab", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\t\\nLeading escaped newline");
+    std::string data("82344\t\\nLeading escaped newline\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -239,10 +252,12 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("\nLeading escaped newline", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tHas escaped\\\\ escape char");
+    std::string data("82344\tHas escaped\\\\ escape char\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -253,6 +268,8 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("Has escaped\\ escape char", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   const char * inputTokens [] = {"0", "1", "\\f", "2", "3", "\\b", "4", "5", 
@@ -268,6 +285,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
       data << inputTokens[j % 15];
       expected << outputTokens[j % 15];
     }
+    data << "\tTHIRD";
     std::string tmp = data.str();
     StringDataBlock blk;
     blk.bindString(tmp);
@@ -287,7 +305,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
 		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
 		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
 		     "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
-		     "ooooooooooooooooooooooooooooooooooooooooooooong string");
+		     "ooooooooooooooooooooooooooooooooooooooooooooong string\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -303,10 +321,31 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
 					 "oooooooooooooooooooooooooooooooooooooooooooooooooooooo"
 					 "ooooooooooooooooooooooooooooooooooooooooooooong string",
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD",
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tInvalid escaped\\ char");
+    // try a string that has a escaped char right over a 64-byte boundary
+    std::string data("82344\ti-mobileidea3b(MRE\\[.3.00(20480) resolution\\]20480 chipset\\[T6255 touch\\] tpannel\\( camera\\)\tTHIRD");
+
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("i-mobileidea3b(MRE\\[.3.00(20480) resolution\\]20480 chipset\\[T6255 touch\\] tpannel\\( camera\\)",
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD",
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+    
+  }
+  {
+    std::string data("82344\tInvalid escaped\\achar\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -319,20 +358,55 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tTrailing incomplete escape char\\");
+    std::string data("82344\tEscaped paren\\( and brace\\} string\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
-    std::vector<FieldImporter >::iterator it = importers.begin();
-    BOOST_CHECK(it->Import(blk, buf));
-    ++it;
-    BOOST_CHECK(it->Import(blk, buf));
-    ++it;
-    BOOST_CHECK(!it->Import(blk, buf));
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+ 	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Escaped paren\\( and brace\\} string",
+ 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD",
+ 					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tString data%twith escaped tab");
+    std::string data("82344\tEscaped CR and NL\\r\\nBack to back\tTHIRD");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+ 	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Escaped CR and NL\r\nBack to back",
+ 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD",
+ 					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tTrailing incomplete escape char\\\tTHIRD");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = importers.begin();
+ 	it != importers.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Trailing incomplete escape char\\",
+ 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD",
+ 					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tString data%twith escaped tab and escaped non-control %a\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -341,12 +415,14 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
       BOOST_CHECK(it->Import(blk, buf));
     }
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
-    BOOST_CHECK(boost::algorithm::equals("String data\twith escaped tab", 
+    BOOST_CHECK(boost::algorithm::equals("String data\twith escaped tab and escaped non-control %a", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tInvalid escape sequence %z");
+    std::string data("82344\tInvalid escape sequence %\a\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -359,7 +435,7 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     recordType->getFree().free(buf);
   }
   {
-    std::string data("82344\tHas escaped%% escape char");
+    std::string data("82344\tHas escaped%% escape char\tTHIRD");
     StringDataBlock blk;
     blk.bindString(data);
     RecordBuffer buf = recordType->getMalloc().malloc();
@@ -370,6 +446,24 @@ BOOST_AUTO_TEST_CASE(testImportFromStringDataBlockWithEscapes)
     BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
     BOOST_CHECK(boost::algorithm::equals("Has escaped% escape char", 
 					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
+    recordType->getFree().free(buf);
+  }
+  {
+    std::string data("82344\tHas escaped%( printable char\tTHIRD");
+    StringDataBlock blk;
+    blk.bindString(data);
+    RecordBuffer buf = recordType->getMalloc().malloc();
+    for(std::vector<FieldImporter >::iterator it = percentImporters.begin();
+	it != percentImporters.end(); ++it) {
+      BOOST_CHECK(it->Import(blk, buf));
+    }
+    BOOST_CHECK_EQUAL(82344, recordType->getFieldAddress("a").getInt32(buf));
+    BOOST_CHECK(boost::algorithm::equals("Has escaped%( printable char", 
+					 recordType->getFieldAddress("b").getVarcharPtr(buf)->c_str()));
+    BOOST_CHECK(boost::algorithm::equals("THIRD", 
+					 recordType->getFieldAddress("c").getVarcharPtr(buf)->c_str()));
     recordType->getFree().free(buf);
   }
 }

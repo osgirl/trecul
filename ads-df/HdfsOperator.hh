@@ -188,6 +188,7 @@ public:
   ~HdfsWritableFileFactory();
   FileSystem * getFileSystem();
   WritableFile * openForWrite(PathPtr p);
+  bool mkdir(PathPtr p);
 };
 
 class FileCreationPolicy
