@@ -57,7 +57,7 @@ set(Boost_USE_MULTITHREADED ON)
 #
 # Boost
 #
-find_package( Boost 1.49 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
+find_package( Boost 1.55 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
 include_directories ( ${Boost_INCLUDE_DIR} )
 
 #
@@ -91,16 +91,16 @@ MESSAGE (STATUS "Found JVM shared library: ${JAVA_JVM_LIBRARY}")
 #
 find_package(LLVM REQUIRED)
 
-# What version of LLVM?  We only support LLVM 2.8
+# What version of LLVM?  We only support LLVM 3.4.2
 execute_process(
 COMMAND ${LLVM_CONFIG} --version
 OUTPUT_VARIABLE LLVM_VERSION
 OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-if (NOT ${LLVM_VERSION} VERSION_EQUAL "2.8")
-  MESSAGE(FATAL_ERROR "LLVM Version is ${LLVM_VERSION}; only 2.8 is supported")
-endif (NOT ${LLVM_VERSION} VERSION_EQUAL "2.8")
+if (NOT ${LLVM_VERSION} VERSION_EQUAL "3.4.2")
+  MESSAGE(FATAL_ERROR "LLVM Version is ${LLVM_VERSION}; only 3.4.2 is supported")
+endif (NOT ${LLVM_VERSION} VERSION_EQUAL "3.4.2")
 
 
 # Definitions needed by LLVM headers
@@ -127,13 +127,18 @@ find_package(URIPARSER REQUIRED)
 include_directories ( ${URIPARSER_INCLUDE_DIRS} )
 
 #
+# zlib
+#
+find_package(ZLIB REQUIRED)
+include_directories ( ${ZLIB_INCLUDE_DIRS} )
+
+#
 # Miscellaneous libraries builtin to Linux
 # TODO: Should we use FindZLIB?
 #
 find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
 find_library(LIB_RT rt)
-find_library(LIB_Z z)
 
 #
 # Setup CXX11 flag

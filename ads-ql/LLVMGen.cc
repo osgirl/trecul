@@ -44,15 +44,16 @@
 #include "CodeGenerationContext.hh"
 #include "TypeCheckContext.hh"
 
-#include "llvm/LLVMContext.h"
-#include "llvm/Module.h"
-#include "llvm/Constants.h"
-#include "llvm/DerivedTypes.h"
-#include "llvm/Instructions.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/ExecutionEngine/JIT.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
-#include "llvm/Target/TargetSelect.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -2170,7 +2171,7 @@ IQLToLLVMValueRef IQLToLLVMBuildArray(IQLCodeGenerationContextRef ctxtRef,
 {
   CodeGenerationContext * ctxt = unwrap(ctxtRef);
   std::vector<const IQLToLLVMValue *> &vals(*unwrap(lhs));
-  const FieldType * ty = (const FieldType *) arrayAttrs;
+  FieldType * ty = (FieldType *) arrayAttrs;
   return wrap(ctxt->buildArray(vals, ty));
 }
 
@@ -2336,7 +2337,7 @@ IQLToLLVMLValueRef IQLToLLVMBuildArrayLValue(IQLCodeGenerationContextRef ctxtRef
   
   // GEP to get pointer to the correct offset.
   llvm::Value * gepIndexes[1] = { llvm::unwrap(unwrap(idx)->getValue())};
-  lval = b->CreateInBoundsGEP(lval, &gepIndexes[0], &gepIndexes[1]);
+  lval = b->CreateInBoundsGEP(lval, llvm::ArrayRef<llvm::Value*>(&gepIndexes[0], &gepIndexes[1]));
   return wrap(new IQLToLLVMLocal(unwrap(IQLToLLVMValue::get(ctxt, 
 							    llvm::wrap(lval),
 							    IQLToLLVMValue::eLocal)),
@@ -2597,7 +2598,7 @@ IQLToLLVMValueRef IQLToLLVMEndIfThenElse(IQLCodeGenerationContextRef ctxtRef, IQ
   llvm::Value * e1 = llvm::unwrap(unwrap(thenVal)->getValue());
   llvm::Value * e2 = llvm::unwrap(unwrap(elseVal)->getValue());
 
-  llvm::PHINode *PN = b->CreatePHI(llvm::unwrap(cvt.getResultType()), "iftmp");
+  llvm::PHINode *PN = b->CreatePHI(llvm::unwrap(cvt.getResultType()), 2, "iftmp");
 
   PN->addIncoming(e1, stk.top()->ThenBB);
   PN->addIncoming(e2, stk.top()->ElseBB);

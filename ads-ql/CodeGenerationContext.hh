@@ -472,9 +472,9 @@ public:
    * Build an array expression
    */
   const IQLToLLVMValue * buildArray(std::vector<const IQLToLLVMValue *>& vals,
-				    const FieldType * arrayTy);
+				    FieldType * arrayTy);
   const IQLToLLVMValue * buildGlobalConstArray(std::vector<const IQLToLLVMValue *>& vals,
-					       const FieldType * arrayTy);
+					       FieldType * arrayTy);
 
   /**
    * Call a function.

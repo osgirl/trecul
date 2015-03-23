@@ -59,7 +59,7 @@ TableOperator.cc
 TcpOperator.cc
 )
 
-target_link_libraries( ads-df ads-ql ${LIB_Z} ${LIB_RT} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${JAVA_JVM_LIBRARY} ${HADOOP_LIBRARIES} )
+target_link_libraries( ads-df ads-ql ${ZLIB_LIBRARIES} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${JAVA_JVM_LIBRARY} ${HADOOP_LIBRARIES} ${LIB_RT} )
 
 add_executable( ads-df-exe ads-df.cc )
 set_target_properties( ads-df-exe PROPERTIES OUTPUT_NAME "ads-df")
