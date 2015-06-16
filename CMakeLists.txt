@@ -134,7 +134,6 @@ include_directories ( ${ZLIB_INCLUDE_DIRS} )
 
 #
 # Miscellaneous libraries builtin to Linux
-# TODO: Should we use FindZLIB?
 #
 find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
