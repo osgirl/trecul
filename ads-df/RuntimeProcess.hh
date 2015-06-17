@@ -379,75 +379,14 @@ public:
   DataflowScheduler& getScheduler(int32_t partition);
 };
 
-class AdsDfSpeculativeExecution
-{
-public:
-  enum Type { BOTH, NONE, MAP, REDUCE };
-private:
-  Type mType;
-public:
-  AdsDfSpeculativeExecution();
-  AdsDfSpeculativeExecution(const std::string& str);
-  const char * isMapEnabledString() const;
-  const char * isReduceEnabledString() const;
-};
-
 class PlanRunner
 {
 private:
   static void createSerialized64PlanFromFile(const std::string& f,
 					     int32_t partitions,
 					     std::string& plan);
-  static void createSerialized64MapPlan(const std::string& f,
-					int32_t partitions,
-					std::string& emitFormat,
-					std::string& plan);
-  static void createSerialized64ReducePlan(const std::string& f,
-					   int32_t partitions,
-					   const std::string& defaultReduceFormat,
-					   std::string& plan);
 public:
-  static int runMapReduceJob(const std::string& mapProgram,
-			     const std::string& reduceProgram,
-			     const std::string& inputDir,
-			     const std::string& outputDir,
-			     bool useHp);
-  static int runMapReduceJob(const std::string& mapProgram,
-			     const std::string& reduceProgram,
-			     const std::string& inputDir,
-			     const std::string& outputDir,
-			     int32_t numReduces,
-			     bool jvmReuse,
-			     bool useHp);
-  static int runMapReduceJob(const std::string& mapProgram,
-			     const std::string& reduceProgram,
-			     const std::string& name,
-			     const std::string& jobQueue,
-			     const std::string& inputDir,
-			     const std::string& outputDir,
-			     int32_t numReduces,
-			     bool jvmReuse,
-			     bool useHp,
-			     AdsDfSpeculativeExecution speculative,
-			     int32_t timeout);
   static int run(int argc, char ** argv);
-};
-
-/**
- * Interface into the Hadoop installation.
- */
-class HadoopSetup
-{
-public:
-  /**
-   * Get the Hadoop installation directory.
-   */
-  static std::string hadoopHome();
-  /**
-   * Set appropriate environment variables required for Hadoop
-   * and HDFS functionality (e.g. CLASSPATH).
-   */
-  static void setEnvironment();
 };
 
 class Executable

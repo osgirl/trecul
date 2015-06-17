@@ -2,7 +2,6 @@
 
 #include "FileService.hh"
 #include "AsynchronousFileSystem.hh"
-#include "HdfsOperator.hh"
 #include "RuntimeProcess.hh"
 #include "RecordParser.hh"
 

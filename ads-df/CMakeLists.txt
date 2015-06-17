@@ -32,6 +32,12 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+if (HADOOP_FOUND) 
+   set (EXTRA_SOURCE ${EXTRA_SOURCE} HdfsOperator.cc MapReduceJob.cc)
+   set (EXTRA_LIBS ${EXTRA_LIBS} ${JAVA_JVM_LIBRARY} ${HADOOP_LIBRARIES})
+   add_definitions(-DTRECUL_HAS_HADOOP)
+endif (HADOOP_FOUND)
+
 add_library(ads-df 
 http_parser.c
 AsyncRecordParser.cc 
@@ -43,7 +49,6 @@ FileSystem.cc
 FileWriteOperator.cc 
 GraphBuilder.cc 
 GzipOperator.cc 
-HdfsOperator.cc 
 HttpOperator.cc 
 LogicalOperator.cc 
 Merger.cc 
@@ -57,15 +62,18 @@ StreamBufferBlock.cc
 TableMetadata.cc
 TableOperator.cc
 TcpOperator.cc
+${EXTRA_SOURCE}
 )
 
-target_link_libraries( ads-df ads-ql ${ZLIB_LIBRARIES} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${JAVA_JVM_LIBRARY} ${HADOOP_LIBRARIES} ${LIB_RT} )
+target_link_libraries( ads-df ads-ql ${ZLIB_LIBRARIES} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${EXTRA_LIBS} ${LIB_RT} )
 
 add_executable( ads-df-exe ads-df.cc )
 set_target_properties( ads-df-exe PROPERTIES OUTPUT_NAME "ads-df")
 target_link_libraries( ads-df-exe ads-df )
 
-add_executable( ads-df-pipes pipes.cc )
-target_link_libraries( ads-df-pipes ads-df )
+if (HADOOP_FOUND)
+   add_executable( ads-df-pipes pipes.cc )
+   target_link_libraries( ads-df-pipes ads-df )
+endif (HADOOP_FOUND)
 
 

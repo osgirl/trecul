@@ -756,6 +756,7 @@ BOOST_AUTO_TEST_CASE(testURI)
     BOOST_CHECK(boost::algorithm::equals(p.getPath(), "/this/is/a/relative/path"));
     BOOST_CHECK_EQUAL(0, p.getPort());
   }
+#if defined(TRECUL_HAS_HADOOP)
   {
     URI a("hdfs://myhost:9000/");
     URI b("this/is/a/relative/path");
@@ -784,6 +785,7 @@ BOOST_AUTO_TEST_CASE(testURI)
       BOOST_CHECK(boost::algorithm::starts_with(err, "Failed to parse"));      
     }
   }
+#endif
 }
 
 BOOST_AUTO_TEST_CASE(testPagedHashTable)

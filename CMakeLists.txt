@@ -63,28 +63,27 @@ include_directories ( ${Boost_INCLUDE_DIR} )
 #
 # Hadoop 
 #
-# we should make this optional component since it 
-# might be useful to do a local execution only
-# build just to kick the tires (or maybe we get our
-# MPI code out there as an alternative).
-#
-find_package(HADOOP REQUIRED) 
-include_directories(${HADOOP_INCLUDE_DIRS})
+find_package(HADOOP) 
+if (HADOOP_FOUND)
+   include_directories(${HADOOP_INCLUDE_DIRS})
 
-#
-# JNI 
-# 
-# JNI is only required if we are using HDFS.  If we make
-# Hadoop integration optional, then we should make this
-# optional as well.
-# If you need to point this to a know Java install,
-# just set JAVA_HOME in your environment.
-find_package(JNI REQUIRED)
-# Note that FindJNI doesn't properly set JNI_FOUND or honor
-# REQUIRED
-include_directories ( ${JAVA_INCLUDE_PATH} ${JAVA_INCLUDE_PATH2} )
-MESSAGE (STATUS "Found JNI header: ${JAVA_INCLUDE_PATH}")
-MESSAGE (STATUS "Found JVM shared library: ${JAVA_JVM_LIBRARY}")
+   #
+   # JNI 
+   # 
+   # JNI is only required if we are using HDFS.  If we make
+   # Hadoop integration optional, then we should make this
+   # optional as well.
+   # If you need to point this to a know Java install,
+   # just set JAVA_HOME in your environment.
+   find_package(JNI)
+   # Note that FindJNI doesn't properly set JNI_FOUND or honor
+   # REQUIRED
+   if (JNI_FOUND)
+      include_directories ( ${JAVA_INCLUDE_PATH} ${JAVA_INCLUDE_PATH2} )
+   endif (JNI_FOUND)
+   MESSAGE (STATUS "Found JNI header: ${JAVA_INCLUDE_PATH}")
+   MESSAGE (STATUS "Found JVM shared library: ${JAVA_JVM_LIBRARY}")
+endif (HADOOP_FOUND)
 
 #
 # LLVM

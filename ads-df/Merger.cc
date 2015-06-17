@@ -39,10 +39,15 @@
 #include <boost/make_shared.hpp>
 #include <boost/tokenizer.hpp>
 #include "Merger.hh"
-#include "HdfsOperator.hh"
 #include "ConstantScan.hh"
 #include "RecordParser.hh"
 #include "RuntimeProcess.hh"
+#include "FileWriteOperator.hh"
+
+#if defined(TRECUL_HAS_HADOOP)
+// For HdfsWritableFileFactory : It would be good to wrap this up with the FileSystem abstraction.
+#include "HdfsOperator.hh"
+#endif
 
 struct SortNodeLess : std::binary_function<SortNode, SortNode, bool>
 {
@@ -677,7 +682,16 @@ FileCreationPolicy * LogicalFileWrite::getCreationPolicy(UriPtr uri) const
 WritableFileFactory * LogicalFileWrite::getFileFactory(UriPtr uri) const
 {
   if (boost::algorithm::iequals(uri->getScheme(), "hdfs")) {
+#if defined(TRECUL_HAS_HADOOP)
+    // TODO: Support passing non-default file construction parameters
+    // Seems like the correct thing to do would be to have the file system
+    // abstraction encapsulate the parameters available, the parsing of said
+    // parameters and the creation of the writable factory from them.
+    // For now I've punted on all of this.
     return new HdfsWritableFileFactory(uri);
+#else
+    throw std::runtime_error("HDFS support not available");
+#endif
   } else {
     return new LocalWritableFileFactory(uri);
   } 
