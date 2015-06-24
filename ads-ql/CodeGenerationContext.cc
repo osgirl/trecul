@@ -37,6 +37,13 @@
 #include "RecordType.hh"
 #include "TypeCheckContext.hh"
 
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+
 /**
  * Call a decimal binary operator.
  */
@@ -614,7 +621,7 @@ void CodeGenerationContext::conditionalBranch(const IQLToLLVMValue * condVal,
 
 const IQLToLLVMValue * 
 CodeGenerationContext::buildArray(std::vector<const IQLToLLVMValue *>& vals,
-				  const FieldType * arrayTy)
+				  FieldType * arrayTy)
 {
   // Detect if this is an array of constants
   // TODO: We need analysis or attributes that tell us whether the
@@ -643,7 +650,7 @@ CodeGenerationContext::buildArray(std::vector<const IQLToLLVMValue *>& vals,
   LLVMValueRef result = LLVMCreateEntryBlockAlloca(this, 
 						   llvm::wrap(retTy),
 						   "nullableBinOp");    
-  const llvm::Type * ptrToElmntTy = llvm::cast<llvm::SequentialType>(retTy)->getElementType();
+  llvm::Type * ptrToElmntTy = llvm::cast<llvm::SequentialType>(retTy)->getElementType();
   ptrToElmntTy = llvm::PointerType::get(ptrToElmntTy, 0);
   llvm::Value * ptrToElmnt = b->CreateBitCast(llvm::unwrap(result), ptrToElmntTy);
   // TODO: We are not allowing nullable element types for arrays at this point.
@@ -654,8 +661,9 @@ CodeGenerationContext::buildArray(std::vector<const IQLToLLVMValue *>& vals,
 
     // GEP to get pointer to the correct offset.
     llvm::Value * gepIndexes[1] = { b->getInt64(i) };
-    llvm::Value * lval = b->CreateInBoundsGEP(ptrToElmnt, &gepIndexes[0], 
-					      &gepIndexes[1]);
+    llvm::Value * lval = b->CreateInBoundsGEP(ptrToElmnt, 
+					      llvm::ArrayRef<llvm::Value*>(&gepIndexes[0], 
+									   &gepIndexes[1]));
     const IQLToLLVMValue * slot = unwrap(IQLToLLVMValue::get(this, 
 							     llvm::wrap(lval),
 							     IQLToLLVMValue::eLocal));
@@ -669,12 +677,12 @@ CodeGenerationContext::buildArray(std::vector<const IQLToLLVMValue *>& vals,
 
 const IQLToLLVMValue * 
 CodeGenerationContext::buildGlobalConstArray(std::vector<const IQLToLLVMValue *>& vals,
-					     const FieldType * arrayTy)
+					     FieldType * arrayTy)
 {
   llvm::Module * m = llvm::unwrap(LLVMModule);
   llvm::LLVMContext * c = llvm::unwrap(LLVMContext);
   llvm::IRBuilder<> * b = llvm::unwrap(LLVMBuilder);
-  const llvm::ArrayType * arrayType = 
+  llvm::ArrayType * arrayType = 
     llvm::dyn_cast<llvm::ArrayType>(arrayTy->LLVMGetType(this));
   BOOST_ASSERT(arrayType != NULL);
   llvm::GlobalVariable * globalArray = 
@@ -748,7 +756,7 @@ CodeGenerationContext::buildCall(const char * treculName,
 
     const llvm::Type * retTy = retType->LLVMGetType(this);
     // The return type is determined by next to last argument.
-    const llvm::Type * retArgTy = llvm::cast<llvm::PointerType>(fnTy->getParamType(fnTy->getNumParams()-2))->getElementType();
+    llvm::Type * retArgTy = llvm::cast<llvm::PointerType>(fnTy->getParamType(fnTy->getNumParams()-2))->getElementType();
 
     // Must alloca a value for the return value and pass as an arg.
     // No guarantee that the type of the formal of the function is exactly

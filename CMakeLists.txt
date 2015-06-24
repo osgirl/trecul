@@ -57,50 +57,49 @@ set(Boost_USE_MULTITHREADED ON)
 #
 # Boost
 #
-find_package( Boost 1.49 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
+find_package( Boost 1.55 COMPONENTS date_time filesystem iostreams program_options regex serialization system thread unit_test_framework REQUIRED )
 include_directories ( ${Boost_INCLUDE_DIR} )
 
 #
 # Hadoop 
 #
-# we should make this optional component since it 
-# might be useful to do a local execution only
-# build just to kick the tires (or maybe we get our
-# MPI code out there as an alternative).
-#
-find_package(HADOOP REQUIRED) 
-include_directories(${HADOOP_INCLUDE_DIRS})
+find_package(HADOOP) 
+if (HADOOP_FOUND)
+   include_directories(${HADOOP_INCLUDE_DIRS})
 
-#
-# JNI 
-# 
-# JNI is only required if we are using HDFS.  If we make
-# Hadoop integration optional, then we should make this
-# optional as well.
-# If you need to point this to a know Java install,
-# just set JAVA_HOME in your environment.
-find_package(JNI REQUIRED)
-# Note that FindJNI doesn't properly set JNI_FOUND or honor
-# REQUIRED
-include_directories ( ${JAVA_INCLUDE_PATH} ${JAVA_INCLUDE_PATH2} )
-MESSAGE (STATUS "Found JNI header: ${JAVA_INCLUDE_PATH}")
-MESSAGE (STATUS "Found JVM shared library: ${JAVA_JVM_LIBRARY}")
+   #
+   # JNI 
+   # 
+   # JNI is only required if we are using HDFS.  If we make
+   # Hadoop integration optional, then we should make this
+   # optional as well.
+   # If you need to point this to a know Java install,
+   # just set JAVA_HOME in your environment.
+   find_package(JNI)
+   # Note that FindJNI doesn't properly set JNI_FOUND or honor
+   # REQUIRED
+   if (JNI_FOUND)
+      include_directories ( ${JAVA_INCLUDE_PATH} ${JAVA_INCLUDE_PATH2} )
+   endif (JNI_FOUND)
+   MESSAGE (STATUS "Found JNI header: ${JAVA_INCLUDE_PATH}")
+   MESSAGE (STATUS "Found JVM shared library: ${JAVA_JVM_LIBRARY}")
+endif (HADOOP_FOUND)
 
 #
 # LLVM
 #
 find_package(LLVM REQUIRED)
 
-# What version of LLVM?  We only support LLVM 2.8
+# What version of LLVM?  We only support LLVM 3.4.2
 execute_process(
 COMMAND ${LLVM_CONFIG} --version
 OUTPUT_VARIABLE LLVM_VERSION
 OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-if (NOT ${LLVM_VERSION} VERSION_EQUAL "2.8")
-  MESSAGE(FATAL_ERROR "LLVM Version is ${LLVM_VERSION}; only 2.8 is supported")
-endif (NOT ${LLVM_VERSION} VERSION_EQUAL "2.8")
+if (NOT ${LLVM_VERSION} VERSION_EQUAL "3.4.2")
+  MESSAGE(FATAL_ERROR "LLVM Version is ${LLVM_VERSION}; only 3.4.2 is supported")
+endif (NOT ${LLVM_VERSION} VERSION_EQUAL "3.4.2")
 
 
 # Definitions needed by LLVM headers
@@ -127,12 +126,31 @@ find_package(URIPARSER REQUIRED)
 include_directories ( ${URIPARSER_INCLUDE_DIRS} )
 
 #
+# zlib
+#
+find_package(ZLIB REQUIRED)
+include_directories ( ${ZLIB_INCLUDE_DIRS} )
+
+#
 # Miscellaneous libraries builtin to Linux
-# TODO: Should we use FindZLIB?
 #
 find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
-find_library(LIB_Z z)
+find_library(LIB_RT rt)
+
+#
+# Setup CXX11 flag
+#
+if(CMAKE_COMPILER_IS_GNUCXX)
+   SET(ENABLE_CXX11 "-std=c++11")
+
+   EXECUTE_PROCESS(COMMAND "${CMAKE_CXX_COMPILER} -dumpversion" OUTPUT_VARIABLE GCC_VERSION)
+   if (GCC_VERSION VERSION_LESS 4.7)
+      SET(ENABLE_CXX11 "-std=c++0x")
+   endif()
+
+   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ENABLE_CXX11}")
+endif()
 
 ######################################################
 ######################################################

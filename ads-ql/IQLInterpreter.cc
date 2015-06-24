@@ -46,24 +46,31 @@
 #include <antlr3defs.h>
 
 // LLVM Includes
-#include "llvm/LLVMContext.h"
 #include "llvm/ExecutionEngine/JIT.h"
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
 #include "llvm/PassManager.h"
 #include "llvm/Analysis/Verifier.h"
-#include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/IRReader.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CodeGen/MachineRelocation.h"
+#include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/Memory.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/System/DynamicLibrary.h"
-#include "llvm/System/Memory.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
 
 #include "md5.h"
 #include "IQLInterpreter.hh"
@@ -1250,7 +1257,7 @@ void LLVMBase::CreateMemcpyIntrinsic()
 
   llvm::PointerType* PointerTy_3 = llvm::PointerType::get(llvm::IntegerType::get(mod->getContext(), 8), 0);
   
-  std::vector<const llvm::Type*>FuncTy_7_args;
+  std::vector<llvm::Type*>FuncTy_7_args;
   FuncTy_7_args.push_back(PointerTy_3);
   FuncTy_7_args.push_back(PointerTy_3);
   FuncTy_7_args.push_back(llvm::IntegerType::get(mod->getContext(), 64));
@@ -1266,20 +1273,9 @@ void LLVMBase::CreateMemcpyIntrinsic()
 								/*Linkage=*/llvm::GlobalValue::ExternalLinkage,
 								/*Name=*/"llvm.memcpy.p0i8.p0i8.i64", mod); // (external, no body)
   func_llvm_memcpy_i64->setCallingConv(llvm::CallingConv::C);
-  llvm::AttrListPtr func_llvm_memcpy_i64_PAL;
-  {
-    llvm::SmallVector<llvm::AttributeWithIndex, 4> Attrs;
-    llvm::AttributeWithIndex PAWI;
-    PAWI.Index = 1U; PAWI.Attrs = 0  | llvm::Attribute::NoCapture;
-    Attrs.push_back(PAWI);
-    PAWI.Index = 2U; PAWI.Attrs = 0  | llvm::Attribute::NoCapture;
-    Attrs.push_back(PAWI);
-    PAWI.Index = 4294967295U; PAWI.Attrs = 0  | llvm::Attribute::NoUnwind;
-    Attrs.push_back(PAWI);
-    func_llvm_memcpy_i64_PAL = llvm::AttrListPtr::get(Attrs.begin(), Attrs.end());
-    
-  }
-  func_llvm_memcpy_i64->setAttributes(func_llvm_memcpy_i64_PAL);
+  func_llvm_memcpy_i64->setDoesNotCapture(1);
+  func_llvm_memcpy_i64->setDoesNotCapture(2);
+  func_llvm_memcpy_i64->setDoesNotThrow();
 
   mContext->LLVMMemcpyIntrinsic = llvm::wrap(func_llvm_memcpy_i64);
 }
@@ -1290,7 +1286,7 @@ void LLVMBase::CreateMemsetIntrinsic()
 
   llvm::PointerType* PointerTy_3 = llvm::PointerType::get(llvm::IntegerType::get(mod->getContext(), 8), 0);
   
-  std::vector<const llvm::Type*>FuncTy_7_args;
+  std::vector<llvm::Type*>FuncTy_7_args;
   FuncTy_7_args.push_back(PointerTy_3);
   FuncTy_7_args.push_back(llvm::IntegerType::get(mod->getContext(), 8));
   FuncTy_7_args.push_back(llvm::IntegerType::get(mod->getContext(), 64));
@@ -1306,18 +1302,8 @@ void LLVMBase::CreateMemsetIntrinsic()
     /*Linkage=*/llvm::GlobalValue::ExternalLinkage,
     /*Name=*/"llvm.memset.p0i8.i64", mod); // (external, no body)
   func_llvm_memset_i64->setCallingConv(llvm::CallingConv::C);
-  llvm::AttrListPtr func_llvm_memset_i64_PAL;
-  {
-    llvm::SmallVector<llvm::AttributeWithIndex, 4> Attrs;
-    llvm::AttributeWithIndex PAWI;
-    PAWI.Index = 1U; PAWI.Attrs = 0  | llvm::Attribute::NoCapture;
-    Attrs.push_back(PAWI);
-    PAWI.Index = 4294967295U; PAWI.Attrs = 0  | llvm::Attribute::NoUnwind;
-    Attrs.push_back(PAWI);
-    func_llvm_memset_i64_PAL = llvm::AttrListPtr::get(Attrs.begin(), Attrs.end());
-    
-  }
-  func_llvm_memset_i64->setAttributes(func_llvm_memset_i64_PAL);
+  func_llvm_memset_i64->setDoesNotCapture(1);
+  func_llvm_memset_i64->setDoesNotThrow();
 
   mContext->LLVMMemsetIntrinsic = llvm::wrap(func_llvm_memset_i64);
 }
@@ -1328,7 +1314,7 @@ void LLVMBase::CreateMemcmpIntrinsic()
 
   llvm::PointerType* PointerTy_0 = llvm::PointerType::get(llvm::IntegerType::get(mod->getContext(), 8), 0);
 
-  std::vector<const llvm::Type*>FuncTy_12_args;
+  std::vector<llvm::Type*>FuncTy_12_args;
   FuncTy_12_args.push_back(PointerTy_0);
   FuncTy_12_args.push_back(PointerTy_0);
   FuncTy_12_args.push_back(llvm::IntegerType::get(mod->getContext(), 64));
@@ -1342,16 +1328,8 @@ void LLVMBase::CreateMemcmpIntrinsic()
     /*Linkage=*/llvm::GlobalValue::ExternalLinkage,
     /*Name=*/"memcmp", mod); // (external, no body)
   func_memcmp->setCallingConv(llvm::CallingConv::C);
-  llvm::AttrListPtr func_memcmp_PAL;
-  {
-    llvm::SmallVector<llvm::AttributeWithIndex, 4> Attrs;
-    llvm::AttributeWithIndex PAWI;
-    PAWI.Index = 4294967295U; PAWI.Attrs = 0  | llvm::Attribute::NoUnwind | llvm::Attribute::ReadOnly;
-    Attrs.push_back(PAWI);
-    func_memcmp_PAL = llvm::AttrListPtr::get(Attrs.begin(), Attrs.end());
-    
-  }
-  func_memcmp->setAttributes(func_memcmp_PAL);
+  func_memcmp->setOnlyReadsMemory(0);
+  func_memcmp->setDoesNotThrow();
 
   // Register symbol for address lookup.
   void * addr;
@@ -2100,7 +2078,7 @@ void LLVMBase::InitializeLLVM()
 
   // Set up the optimizer pipeline.  Start with registering info about how the
   // target lays out data structures.
-  mFPM->add(new llvm::TargetData(*TheExecutionEngine->getTargetData()));
+  mFPM->add(new llvm::DataLayout(*TheExecutionEngine->getDataLayout()));
   // Promote allocas to registers.
   mFPM->add(llvm::createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optzns.
@@ -2329,20 +2307,20 @@ private:
   const std::map<void*, std::string> * mExternalFunctions;
   bool mOwnMap;
 
-  void initialize(const std::vector<unsigned char>& bitcode, 
+  void initialize(const std::string& bitcode, 
 		  const std::vector<std::string>& functionNames);
 public:
-  IQLRecordBufferMethodHandle(const std::vector<unsigned char>& bitcode, 
+  IQLRecordBufferMethodHandle(const std::string& bitcode, 
 			      const std::vector<std::string>& functionNames,
 			      const std::map<void*, std::string>& externalFunctions);
-  IQLRecordBufferMethodHandle(const std::vector<unsigned char>& bitcode, 
+  IQLRecordBufferMethodHandle(const std::string& bitcode, 
 			      const std::vector<std::string>& functionNames);
   ~IQLRecordBufferMethodHandle();
   void * getFunPtr(const std::string& name);
   boost::shared_ptr<X86MethodInfo> getFunInfo(const std::string& name) const;
 };
 
-IQLRecordBufferMethodHandle::IQLRecordBufferMethodHandle(const std::vector<unsigned char>& bitcode, 
+IQLRecordBufferMethodHandle::IQLRecordBufferMethodHandle(const std::string& bitcode, 
 							 const std::vector<std::string>& functionNames)
   :
   TheExecutionEngine(NULL),
@@ -2352,7 +2330,7 @@ IQLRecordBufferMethodHandle::IQLRecordBufferMethodHandle(const std::vector<unsig
   initialize(bitcode, functionNames);
 }
 
-IQLRecordBufferMethodHandle::IQLRecordBufferMethodHandle(const std::vector<unsigned char>& bitcode, 
+IQLRecordBufferMethodHandle::IQLRecordBufferMethodHandle(const std::string& bitcode, 
 							 const std::vector<std::string>& functionNames,
 							 const std::map<void*, std::string>& externalFunctions)
   :
@@ -2370,19 +2348,18 @@ IQLRecordBufferMethodHandle::~IQLRecordBufferMethodHandle()
     delete mExternalFunctions;
 }
 
-void IQLRecordBufferMethodHandle::initialize(const std::vector<unsigned char>& bitcode, 
+void IQLRecordBufferMethodHandle::initialize(const std::string& bitcode, 
 					     const std::vector<std::string>& functionNames)
 {  
   llvm::InitializeNativeTarget();
-  llvm::StringRef str((char *) &bitcode[0], bitcode.size()-1);
-  llvm::MemoryBuffer * mb = llvm::MemoryBuffer::getMemBuffer(str, "MyModule");
+  llvm::MemoryBuffer * mb = llvm::MemoryBuffer::getMemBuffer(bitcode, "MyModule");
   if (mb == NULL) 
     throw std::runtime_error("Failed to create MemoryBuffer");
-  llvm::SMDiagnostic err;
-  mModule = llvm::ParseIR(mb, err, ctxt);
+  std::string ErrStr;
+  mModule = llvm::ParseBitcodeFile(mb, ctxt, &ErrStr);
   if (mModule == NULL)
-    throw std::runtime_error("Failed to restore LLVM module");
-
+    throw std::runtime_error((boost::format("Failed to restore LLVM module: %1%") % ErrStr).str());
+  delete mb;
   // Grab the functions pointers.
   for(std::vector<std::string>::const_iterator it=functionNames.begin();
       it != functionNames.end();
@@ -2394,7 +2371,6 @@ void IQLRecordBufferMethodHandle::initialize(const std::vector<unsigned char>& b
   }
 
   llvm::EngineBuilder engBuilder(mModule);
-  std::string ErrStr;
   engBuilder.setErrorStr(&ErrStr);
   engBuilder.setOptLevel(llvm::CodeGenOpt::Default);
   TheExecutionEngine = engBuilder.create();
@@ -2422,7 +2398,7 @@ boost::shared_ptr<X86MethodInfo> IQLRecordBufferMethodHandle::getFunInfo(const s
   return it->second;
 }
 
-IQLRecordBufferMethod::IQLRecordBufferMethod(const std::vector<unsigned char>& bitcode, const std::string& functionName)
+IQLRecordBufferMethod::IQLRecordBufferMethod(const std::string& bitcode, const std::string& functionName)
   :
   mFunction(NULL),
   mImpl(NULL)
@@ -2759,12 +2735,9 @@ RecordTypeTransfer::RecordTypeTransfer(DynamicRecordContext& recCtxt, const std:
   }
 
   // Save the built module as bitcode
-  llvm::BitstreamWriter writer(mBitcode);
-  llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
-  // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
-  // extra null byte at the end (but that extra byte is not reported as part of the size
-  // just as with strings).  Put that null terminator here.
-  mBitcode.push_back(0);
+  llvm::raw_string_ostream writer(mBitcode);
+  llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+  writer.str();
 
   // TODO: The remaining stuff should be in a separate class because
   // we really want to be able to push the bitcode over the wire.
@@ -2796,7 +2769,7 @@ IQLTransferModule * RecordTypeTransfer::create(bool isPIC) const
 IQLTransferModule::IQLTransferModule(const RecordTypeMalloc& recordMalloc,
 				     const std::string& copyFunName, 
 				     const std::string& moveFunName, 
-				     const std::vector<unsigned char>& bitcode,
+				     const std::string& bitcode,
 				     const std::map<void*,std::string>& externalFunctions,
 				     bool isPIC)
   :
@@ -2959,12 +2932,9 @@ RecordTypeTransfer2::RecordTypeTransfer2(DynamicRecordContext& recCtxt,
   }
 
   // Save the built module as bitcode
-  llvm::BitstreamWriter writer(mBitcode);
-  llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
-  // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
-  // extra null byte at the end (but that extra byte is not reported as part of the size
-  // just as with strings).  Put that null terminator here.
-  mBitcode.push_back(0);
+  llvm::raw_string_ostream writer(mBitcode);
+  llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+  writer.str();
 
   // TODO: The remaining stuff should be in a separate class because
   // we really want to be able to push the bitcode over the wire.
@@ -2998,7 +2968,7 @@ IQLTransferModule2 * RecordTypeTransfer2::create() const
 IQLTransferModule2::IQLTransferModule2(const RecordTypeMalloc& recordMalloc,
 				       const std::string& copyFunName, 
 				       const std::string& moveFunName, 
-				       const std::vector<unsigned char>& bitcode)
+				       const std::string& bitcode)
   :
   mMalloc(recordMalloc),
   mCopyFunName(copyFunName),
@@ -3046,7 +3016,7 @@ void IQLTransferModule2::execute(RecordBuffer * sources,
 }
 
 IQLUpdateModule::IQLUpdateModule(const std::string& funName, 
-				 const std::vector<unsigned char>& bitcode)
+				 const std::string& bitcode)
   :
   mFunName(funName),
   mBitcode(bitcode),
@@ -3146,12 +3116,9 @@ void RecordTypeInPlaceUpdate::init(class DynamicRecordContext& recCtxt,
   // llvm::outs().flush();
 
   // Save the built module as bitcode
-  llvm::BitstreamWriter writer(mBitcode);
-  llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
-  // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
-  // extra null byte at the end (but that extra byte is not reported as part of the size
-  // just as with strings).  Put that null terminator here.
-  mBitcode.push_back(0);
+  llvm::raw_string_ostream writer(mBitcode);
+  llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+  writer.str();
 
   // TODO: The remaining stuff should be in a separate class because
   // we really want to be able to push the bitcode over the wire.
@@ -3172,7 +3139,7 @@ IQLUpdateModule * RecordTypeInPlaceUpdate::create() const
 }
 
 IQLFunctionModule::IQLFunctionModule(const std::string& funName, 
-				     const std::vector<unsigned char>& bitcode)
+				     const std::string& bitcode)
   :
   mFunName(funName),
   mBitcode(bitcode),
@@ -3336,12 +3303,9 @@ void RecordTypeFunction::init(DynamicRecordContext& recCtxt)
   // llvm::outs().flush();
 
   // Save the built module as bitcode
-  llvm::BitstreamWriter writer(mBitcode);
-  llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
-  // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
-  // extra null byte at the end (but that extra byte is not reported as part of the size
-  // just as with strings).  Put that null terminator here.
-  mBitcode.push_back(0);
+  llvm::raw_string_ostream writer(mBitcode);
+  llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+  writer.str();
 
   // TODO: The remaining stuff should be in a separate class because
   // we really want to be able to push the bitcode over the wire.
@@ -3573,12 +3537,9 @@ RecordTypeAggregate::RecordTypeAggregate(DynamicRecordContext& recCtxt,
  mFPM->run(*llvm::unwrap<llvm::Function>(mContext->Transfer.Function));
 
  // Save the built module as bitcode
- llvm::BitstreamWriter writer(mBitcode);
- llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
- // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
- // extra null byte at the end (but that extra byte is not reported as part of the size
- // just as with strings).  Put that null terminator here.
- mBitcode.push_back(0);
+ llvm::raw_string_ostream writer(mBitcode);
+ llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+ writer.str();
 }
 
 RecordTypeAggregate::RecordTypeAggregate(class DynamicRecordContext& recCtxt, 
@@ -3732,12 +3693,9 @@ void RecordTypeAggregate::init(class DynamicRecordContext& recCtxt,
  }
 
  // Save the built module as bitcode
- llvm::BitstreamWriter writer(mBitcode);
- llvm::WriteBitcodeToStream(llvm::unwrap(mContext->LLVMModule), writer);
- // Odd thing about MemoryBuffer::getMemBuffer is that it actually wants the buffer to have an
- // extra null byte at the end (but that extra byte is not reported as part of the size
- // just as with strings).  Put that null terminator here.
- mBitcode.push_back(0);
+ llvm::raw_string_ostream writer(mBitcode);
+ llvm::WriteBitcodeToFile(llvm::unwrap(mContext->LLVMModule), writer);
+ writer.str();
 }
 
 void RecordTypeAggregate::createUpdateFunction(const std::vector<std::string>& groupKeys)
@@ -3774,7 +3732,7 @@ IQLAggregateModule::IQLAggregateModule(const RecordTypeMalloc& aggregateMalloc,
 				       const std::string& initName, 
 				       const std::string& updateName,
 				       const std::string& transferName,
-				       const std::vector<unsigned char>& bitcode,
+				       const std::string& bitcode,
 				       bool isTransferIdentity)
   :
   mAggregateMalloc(aggregateMalloc),

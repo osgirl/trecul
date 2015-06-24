@@ -52,9 +52,13 @@
 #include "GzipOperator.hh"
 #include "TcpOperator.hh"
 #include "HttpOperator.hh"
+#include "FileWriteOperator.hh"
 #include "QueryStringOperator.hh"
-#include "HdfsOperator.hh"
 #include "GraphBuilder.hh"
+
+#if defined(TRECUL_HAS_HADOOP)
+#include "HdfsOperator.hh"
+#endif
 
 #include <boost/date_time/posix_time/posix_time.hpp>
 
@@ -76,7 +80,6 @@ BOOST_CLASS_EXPORT(ImportFixedLengthStringSpec);
 BOOST_CLASS_EXPORT(FileCreationPolicy);
 BOOST_CLASS_EXPORT(MultiFileCreationPolicy);
 BOOST_CLASS_EXPORT(WritableFileFactory);
-BOOST_CLASS_EXPORT(HdfsWritableFileFactory);
 BOOST_CLASS_EXPORT(LocalWritableFileFactory);
 BOOST_CLASS_EXPORT(AssignedOperatorType);
 BOOST_CLASS_EXPORT(ConstrainedOperatorType);
@@ -98,7 +101,6 @@ BOOST_CLASS_EXPORT(RuntimeFilterOperatorType);
 BOOST_CLASS_EXPORT(RuntimeSortMergeOperatorType);
 BOOST_CLASS_EXPORT(RuntimeSortOperatorType);
 BOOST_CLASS_EXPORT(RuntimeSwitchOperatorType);
-BOOST_CLASS_EXPORT(RuntimeHadoopEmitOperatorType);
 BOOST_CLASS_EXPORT(RuntimeHdfsWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeWriteOperatorType);
 BOOST_CLASS_EXPORT(RuntimeUnionAllOperatorType);
@@ -115,6 +117,11 @@ BOOST_CLASS_EXPORT(InternalFileWriteOperatorType);
 BOOST_CLASS_EXPORT(GenericParserOperatorType<ExplicitChunkStrategy>);
 BOOST_CLASS_EXPORT(GenericParserOperatorType<SerialChunkStrategy>);
 BOOST_CLASS_EXPORT(RuntimeConstantScanOperatorType);
+
+#if defined(TRECUL_HAS_HADOOP)
+BOOST_CLASS_EXPORT(HdfsWritableFileFactory);
+BOOST_CLASS_EXPORT(RuntimeHadoopEmitOperatorType);
+#endif
 
 /* 
    base64.cpp and base64.h
@@ -344,7 +351,9 @@ void DataflowGraphBuilder::nodeStart(const char * type,
   } else if (boost::algorithm::iequals("copy", type)) {
     mCurrentOp = new CopyOp();
   } else if (boost::algorithm::iequals("emit", type)) {
+#if defined(TRECUL_HAS_HADOOP)
     mCurrentOp = new LogicalEmit();
+#endif
   } else if (boost::algorithm::iequals("filter", type)) {
     mCurrentOp = new LogicalFilter();
   } else if (boost::algorithm::iequals("generate", type)) {

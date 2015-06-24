@@ -305,6 +305,10 @@ public:
   typedef std::vector<edge_descriptor>::size_type degree_size_type;
   typedef void adjacency_iterator;
 
+  static vertex_descriptor null_vertex() {
+    return NULL;
+  }
+
   LogicalPlan(PlanCheckContext& ctxt);
   ~LogicalPlan();
 

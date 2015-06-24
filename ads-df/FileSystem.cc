@@ -82,6 +82,20 @@ URI::URI(const char * filename)
   
 URI::URI(const URI& parent, const URI& child)
 {
+  initRef(parent, child, true);
+}
+
+URI::URI(const URI& parent, const URI& child, bool isResolve)
+{
+  initRef(parent, child, isResolve);
+}
+
+URI::~URI()
+{
+}
+
+void URI::initRef(const URI& parent, const URI& child, bool isResolve)
+{
   // Reparse uri strings into Uri objects then resolve.
   UriUriA uri;
   UriUriA p;
@@ -100,14 +114,25 @@ URI::URI(const URI& parent, const URI& child)
     throw std::runtime_error((boost::format("Failed to parse URI: %1%") % 
   			      child.toString()).str());
   }
-  
-  if (uriAddBaseUriA(&uri, &c, &p) != URI_SUCCESS) {
-    uriFreeUriMembersA(&p);
-    uriFreeUriMembersA(&c);
-    uriFreeUriMembersA(&uri);
-    throw std::runtime_error((boost::format("Failure resolving relative URI %1% against base %2%") %
-			      child.toString() % parent.toString()).str());
+
+  if (isResolve) {
+    if (uriAddBaseUriA(&uri, &c, &p) != URI_SUCCESS) {
+      uriFreeUriMembersA(&p);
+      uriFreeUriMembersA(&c);
+      uriFreeUriMembersA(&uri);
+      throw std::runtime_error((boost::format("Failure resolving relative URI %1% against base %2%") %
+				child.toString() % parent.toString()).str());
+    }
+  } else {
+    if (uriRemoveBaseUriA(&uri, &c, &p, URI_FALSE) != URI_SUCCESS) {
+      uriFreeUriMembersA(&p);
+      uriFreeUriMembersA(&c);
+      uriFreeUriMembersA(&uri);
+      throw std::runtime_error((boost::format("Failure creating relative URI %1% against base %2%") %
+				child.toString() % parent.toString()).str());
+    }
   }
+
   // All done resolving
   uriFreeUriMembersA(&p);
   uriFreeUriMembersA(&c);
@@ -127,10 +152,6 @@ URI::URI(const URI& parent, const URI& child)
 
   // Done with URI
   uriFreeUriMembersA(&uri);
-}
-
-URI::~URI()
-{
 }
 
 void URI::init(UriUriA * uri)
@@ -188,9 +209,9 @@ Path::Path(UriPtr uri)
 {
 }
 
-Path::Path(PathPtr parent, PathPtr child)
+Path::Path(PathPtr parent, PathPtr child, bool isResolve)
   :
-  mUri(boost::make_shared<URI>(*parent->mUri.get(), *child->mUri.get()))
+  mUri(boost::make_shared<URI>(*parent->mUri.get(), *child->mUri.get(), isResolve))
 {
 }
 
@@ -206,19 +227,29 @@ PathPtr Path::get(UriPtr p)
 
 PathPtr Path::get(PathPtr parent, PathPtr child)
 {
-  return boost::shared_ptr<Path>(new Path(parent, child));
+  return resolveReference(parent, child);
 }
 
 PathPtr Path::get(PathPtr parent,
 		  const std::string& child)
 {
-  return get(parent, get(child));
+  return resolveReference(parent, get(child));
 }
 
 PathPtr Path::get(const std::string& parent,
 		  const std::string& child)
 {
-  return get(get(parent), get(child));
+  return resolveReference(get(parent), get(child));
+}
+
+PathPtr Path::resolveReference(PathPtr parent, PathPtr child)
+{
+  return boost::shared_ptr<Path>(new Path(parent, child, true));
+}
+
+PathPtr Path::createReference(PathPtr parent, PathPtr child)
+{
+  return boost::shared_ptr<Path>(new Path(parent, child, false));
 }
 
 const std::string& Path::toString() const
@@ -393,6 +424,10 @@ public:
    */
   bool rename(PathPtr from, PathPtr to);
 
+  /**
+   * Create a directory.
+   */
+  bool mkdir(PathPtr p);
 };
 
 LocalFileSystemImpl::LocalFileSystemImpl()
@@ -513,6 +548,14 @@ bool LocalFileSystemImpl::rename(PathPtr from, PathPtr to)
     return false;
   }
   boost::filesystem::rename(fromPath, toPath);
+  return true;
+}
+
+bool LocalFileSystemImpl::mkdir(PathPtr p)
+{
+  checkPath(p);
+  boost::filesystem::path fromPath(p->getUri()->getPath());
+  return boost::filesystem::create_directory(fromPath);
 }
 
 static bool canBeSplit(const std::string& file)
@@ -746,6 +789,11 @@ WritableFile * LocalWritableFileFactory::openForWrite(PathPtr p)
     throw std::runtime_error((boost::format("Couldn't create file: %1%") % filename).str());
   }
   return new LocalWritableFile(f);
+}
+
+bool LocalWritableFileFactory::mkdir(PathPtr p)
+{
+  return mFileSystem->mkdir(p);
 }
 
 SerialOrganizedTable::SerialOrganizedTable()

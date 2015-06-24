@@ -39,10 +39,10 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 
 // LLVM Includes
-#include "llvm/LLVMContext.h"
-#include "llvm/Module.h"
-#include "llvm/Instructions.h"
-#include "llvm/Instructions.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Instructions.h"
 
 #include "llvm-c/Core.h"
 
@@ -571,17 +571,18 @@ llvm::Value * DecimalType::createGlobalValue(CodeGenerationContext * ctxt,
 			     llvm::GlobalValue::ExternalLinkage, 
 			     0, "decGlobal");
   // The value to initialize the global
-  const llvm::Type * int32Ty = llvm::Type::getInt32Ty(*c);
+  llvm::Type * int32Ty = llvm::Type::getInt32Ty(*c);
+  llvm::Type * structTypeMembers[4];
   llvm::Constant * constStructMembers[4];
   for(int i=0 ; i<4; i++) {
+    structTypeMembers[i] = int32Ty;
     constStructMembers[i] = llvm::ConstantInt::get(int32Ty, 
 						   ((int32_t *) &dec)[i], 
 						   true);
   }
-  llvm::Constant * globalVal = llvm::ConstantStruct::get(*c, 
-							 &constStructMembers[0],
-							 4,
-							 true);
+  llvm::StructType * structTy = llvm::StructType::create(*c, llvm::ArrayRef<llvm::Type*>(&structTypeMembers[0],4), "decGlobalTy", true);
+  llvm::Constant * globalVal = llvm::ConstantStruct::get(structTy, 
+							 llvm::ArrayRef<llvm::Constant*>(&constStructMembers[0],4));
   globalVar->setInitializer(globalVal);
   return globalVar;
 }

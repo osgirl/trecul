@@ -193,9 +193,25 @@ bool FieldImporter::ImportVariableLengthTerminatedStringWithEscapes(DataBlock& s
       case 'r':
 	localBuf[localBufPtr++] = '\r';
 	break;
+	// The following three (\a, \e, \v) are not allowed
+      case 'a': // Bell
+      case 'e': // Escape
+      case 'v': // Vertical Tab
+	if( escape == '\\' ) {
+	  return false;
+	}
       default:
 	if (*s == escape) {
 	  localBuf[localBufPtr++] = escape;
+	} else if ( (*s == term) || ((*s > 31) && (*s < 127)) ) {
+	  // *s is a printable character; 
+	  // preserve the escape character and *s
+	  // Allow trailing escape char -- treat it as raw input text.
+	  localBuf[localBufPtr++] = escape;
+	  // We don't know if localBufPtr is at the end of localBuf,
+	  // so let the next iteration flush localBuf as necessary.
+	  // Continue, so we don't advance s to the next character
+	  continue;
 	} else {
 	  return false;
 	}
@@ -428,6 +444,7 @@ MemoryMappedFileBuffer::MemoryMappedFileBuffer(const char * file,
   :
   mBlockSize(blockSize),
   mFileSize(0),
+  mRegionOffset(beginOffset),
   mStreamEnd(endOffset),
   mPrefetcher(NULL)
 {
@@ -444,8 +461,8 @@ MemoryMappedFileBuffer::MemoryMappedFileBuffer(const char * file,
 													beginOffset,
 													mBlockSize));
   mCurrentBlockPtr = reinterpret_cast<uint8_t *>(mRegion->get_address());
-  mCurrentBlockEnd = mCurrentBlockPtr + std::min(std::size_t(mFileSize-mRegion->get_offset()), 
-				     mRegion->get_size());
+  mCurrentBlockEnd = mCurrentBlockPtr + std::min(std::size_t(mFileSize-mRegionOffset), 
+						 mRegion->get_size());
   if (mRegion->get_size() <= 0)
     throw std::runtime_error("Invalid memory mapped region");
 }
@@ -461,7 +478,7 @@ MemoryMappedFileBuffer::~MemoryMappedFileBuffer()
 void MemoryMappedFileBuffer::openWindow(std::size_t sz)
 {
   // Are we done with the file?
-  if (mFileSize == uintmax_t(mRegion->get_offset() + (mCurrentBlockPtr - reinterpret_cast<uint8_t*>(mRegion->get_address())))) return;
+  if (mFileSize == uintmax_t(mRegionOffset + (mCurrentBlockPtr - reinterpret_cast<uint8_t*>(mRegion->get_address())))) return;
 
   // Make sure the prefetcher isn't still referencing the window we are about to
   // unmap.
@@ -476,19 +493,18 @@ void MemoryMappedFileBuffer::openWindow(std::size_t sz)
   sz += ptrOffset;
   // Round up sz to nearest page
   sz = (sz + boost::interprocess::mapped_region::get_page_size() - 1)/boost::interprocess::mapped_region::get_page_size();
-
   // Open up a block of at least size sz starting at keep.
+  mRegionOffset += uint64_t(keep-reinterpret_cast<uint8_t *>(mRegion->get_address()));
   mRegion = boost::shared_ptr<boost::interprocess::mapped_region>(
 								 new boost::interprocess::mapped_region(*mMapping.get(),
 													boost::interprocess::read_only,
-													std::size_t(mRegion->get_offset() + 
-														    (keep-reinterpret_cast<uint8_t *>(mRegion->get_address()))),
+													mRegionOffset,
 													std::max(sz, mBlockSize)));
   uint8_t * newRegionStart = reinterpret_cast<uint8_t *>(mRegion->get_address());
   mCurrentBlockMark = mCurrentBlockMark ? newRegionStart : NULL;
   mCurrentBlockPtr = newRegionStart + ptrOffset;  
-  mCurrentBlockEnd = newRegionStart + std::min(std::size_t(mFileSize-mRegion->get_offset()), 
-					 mRegion->get_size());
+  mCurrentBlockEnd = newRegionStart + std::min(std::size_t(mFileSize-mRegionOffset), 
+					       mRegion->get_size());
   if (mRegion->get_size() <= 0)
     throw std::runtime_error("Invalid memory mapped region");
 
@@ -503,7 +519,7 @@ void MemoryMappedFileBuffer::openWindow(std::size_t sz)
 
 bool MemoryMappedFileBuffer::isEOF() 
 {
-  uintmax_t filePointer = uintmax_t(mRegion->get_offset() + 
+  uintmax_t filePointer = uintmax_t(mRegionOffset + 
 				    (mCurrentBlockPtr - reinterpret_cast<uint8_t*>(mRegion->get_address())));
   return mStreamEnd <= filePointer;
 }

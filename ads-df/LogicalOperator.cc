@@ -35,13 +35,16 @@
 #include <stdexcept>
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
-#include <boost/graph/graph_concepts.hpp>
-#include <boost/graph/topological_sort.hpp>
 #include <boost/property_map/property_map.hpp>
 #include <boost/regex.hpp>
 #include <boost/thread.hpp>
 
 #include "LogicalOperator.hh"
+
+// Boost.Graph includes after LogicalOperator so that concepts
+// get picked up properly.
+#include <boost/graph/graph_concepts.hpp>
+#include <boost/graph/topological_sort.hpp>
 
 SortKey::SortKey(const std::string& sortKeySpec)
   :

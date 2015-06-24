@@ -137,7 +137,7 @@ private:
   LLVMFuncType mFunction;
   class IQLRecordBufferMethodHandle * mImpl;
 public:
-  IQLRecordBufferMethod(const std::vector<unsigned char>& bitcode, const std::string& functionName);
+  IQLRecordBufferMethod(const std::string& bitcode, const std::string& functionName);
   ~IQLRecordBufferMethod();
   void Execute(char * buf, class InterpreterContext * ctxt) const
   {
@@ -149,7 +149,7 @@ class IQLUpdateModule
 {
 private:
   std::string mFunName;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
   // TODO: change this to support more than two inputs (using char** presumably)
   typedef void (*LLVMFuncType)(char*, char*, class InterpreterContext *);
   LLVMFuncType mFunction;
@@ -183,7 +183,7 @@ private:
   }
 public:
   IQLUpdateModule(const std::string& funName, 
-		    const std::vector<unsigned char>& bitcode);
+		    const std::string& bitcode);
   ~IQLUpdateModule();
   /**
    * Copy or move the contents of source to target depending on the value
@@ -204,7 +204,7 @@ private:
   std::vector<const RecordType *> mSources;
   std::string mFunName;
   std::string mStatements;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
 
   // TODO: change this to support more than two inputs (using char** presumably)
   typedef void (*LLVMFuncType)(char*, char*, class InterpreterContext *);
@@ -401,7 +401,7 @@ private:
   RecordTypeMalloc mMalloc;
   std::string mCopyFunName;
   std::string mMoveFunName;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
   typedef void (*LLVMFuncType)(char*, char*, class InterpreterContext *);
   LLVMFuncType mCopyFunction;
   LLVMFuncType mMoveFunction;
@@ -468,7 +468,7 @@ public:
   IQLTransferModule(const RecordTypeMalloc & targetMalloc,
 		    const std::string& copyFunName, 
 		    const std::string& moveFunName, 
-		    const std::vector<unsigned char>& bitcode,
+		    const std::string& bitcode,
 		    const std::map<void*,std::string>& externalFunctions,
 		    bool isPIC = false);
   ~IQLTransferModule();
@@ -492,7 +492,7 @@ private:
   const RecordType * mTarget;
   std::string mFunName;
   std::string mTransfer;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
 
   typedef void (*LLVMFuncType)(char*, char*, class InterpreterContext *);
   LLVMFuncType mCopyFunction;
@@ -556,7 +556,7 @@ private:
   RecordTypeMalloc mMalloc;
   std::string mCopyFunName;
   std::string mMoveFunName;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
   // TODO: Must genericize
   typedef void (*LLVMFuncType)(char*, char*, char *, class InterpreterContext *);
   LLVMFuncType mCopyFunction;
@@ -598,7 +598,7 @@ public:
   IQLTransferModule2(const RecordTypeMalloc & recordMalloc,
 		     const std::string& copyFunName, 
 		     const std::string& moveFunName, 
-		     const std::vector<unsigned char>& bitcode);
+		     const std::string& bitcode);
   ~IQLTransferModule2();
   /**
    * Copy or move the contents of source to target depending on the value
@@ -633,7 +633,7 @@ private:
   const RecordType * mTarget;
   std::string mFunName;
   std::string mTransfer;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
 
   // TODO: Must genericize
   typedef void (*LLVMFuncType)(char*, char*, char *, class InterpreterContext *);
@@ -693,7 +693,7 @@ public:
   typedef void (*LLVMFuncType)(char*, char*, int32_t *, class InterpreterContext *);
 private:
   std::string mFunName;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
   LLVMFuncType mFunction;
   class IQLRecordBufferMethodHandle * mImpl;
 
@@ -725,7 +725,7 @@ private:
   }
 public:
   IQLFunctionModule(const std::string& funName, 
-		    const std::vector<unsigned char>& bitcode);
+		    const std::string& bitcode);
   ~IQLFunctionModule();
   /**
    * Execute the method.
@@ -752,7 +752,7 @@ private:
   std::vector<AliasedRecordType> mSources;
   std::string mFunName;
   std::string mStatements;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
 
   LLVMFuncType mFunction;
   class IQLRecordBufferMethodHandle * mImpl;
@@ -806,7 +806,7 @@ private:
   std::string mInitName;
   std::string mUpdateName;
   std::string mTransferName;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
   // TODO: change this to support more than two inputs (using char** presumably)
   typedef void (*LLVMFuncType)(char*, char*, class InterpreterContext *);
   typedef void (*LLVMFuncType2)(char*, char*, char*, class InterpreterContext *);
@@ -861,7 +861,7 @@ public:
 		     const std::string& initName, 
 		     const std::string& updateName,
 		     const std::string& transferName,
-		     const std::vector<unsigned char>& bitcode,
+		     const std::string& bitcode,
 		     bool isTransferIdentity);
   ~IQLAggregateModule();
 
@@ -896,7 +896,7 @@ private:
   std::string mInitializeFun;
   std::string mUpdateFun;
   std::string mTransferFun;
-  std::vector<unsigned char> mBitcode;
+  std::string mBitcode;
 
   // Is the transfer the identity?
   bool mIsIdentity;

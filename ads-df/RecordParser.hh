@@ -1179,6 +1179,8 @@ private:
   std::size_t mBlockSize;
   // File size
   uintmax_t mFileSize;
+  // Offset in file of current mapped_region
+  uint64_t mRegionOffset;
   // End of file we're opened on.
   // Note that this is approximate since
   // for delimited files, we actually can actually read
