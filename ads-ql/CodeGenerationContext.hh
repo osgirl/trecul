@@ -41,6 +41,9 @@
 #include <llvm-c/Core.h>
 
 #include <boost/dynamic_bitset.hpp>
+#include <boost/shared_ptr.hpp>
+
+#include "LLVMGen.h"
 
 namespace llvm {
   class BasicBlock;
@@ -50,8 +53,10 @@ namespace llvm {
 }
 class CodeGenerationContext;
 class FieldType;
+class FieldAddress;
+class BitcpyOp;
+class BitsetOp;
 
-typedef struct IQLToLLVMStruct * LLVMSymbolTableRef;
 typedef struct IQLToLLVMRecordMapStruct * IQLToLLVMRecordMapRef;
 typedef const struct IQLRecordTypeStruct * IQLRecordTypeRef;
 typedef const struct IQLToLLVMValueStruct * IQLToLLVMValueRef;
@@ -85,7 +90,7 @@ public:
   enum ValueType { eGlobal, eShallowGlobal, eLocal };
 private:
   // The actual value
-  LLVMValueRef mValue;
+  llvm::Value * mValue;
   // NULL bit.  This should be non-NULL only on nullable values.
   llvm::Value * mIsNull;
   // Is this value a pointer to a global location,
@@ -94,30 +99,44 @@ private:
   // local value.
   ValueType mValueType;
 public:
-  IQLToLLVMValue (LLVMValueRef val, ValueType globalOrLocal);
+  IQLToLLVMValue (llvm::Value * val, ValueType globalOrLocal);
   
-  IQLToLLVMValue (LLVMValueRef val, llvm::Value * isNull, 
+  IQLToLLVMValue (llvm::Value * val, llvm::Value * isNull, 
 		  ValueType globalOrLocal);
 
-  LLVMValueRef getValue() const;
+  llvm::Value * getValue() const;
   llvm::Value * getNull() const;
   void setNull(llvm::Value * nv);
   bool isLiteralNull() const;
   ValueType getValueType() const;
-  static LLVMTypeRef getVariableType(CodeGenerationContext * ctxt,
-				     const FieldType * ft);
-  static bool isValueType(LLVMTypeRef ty) ;
-  static bool isPointerToValueType(LLVMTypeRef ty) ;
-  bool isValueType() const ;
-  bool isPointerToValueType() const ;
-  bool isReferenceType() const;
-  static IQLToLLVMValueRef get(CodeGenerationContext * ctxt, 
-			       LLVMValueRef val, 
-			       IQLToLLVMValue::ValueType globalOrLocal);
-  static IQLToLLVMValueRef get(CodeGenerationContext * ctxt, 
-			       LLVMValueRef val,
-			       llvm::Value * nv,
-			       IQLToLLVMValue::ValueType globalOrLocal);
+  static const IQLToLLVMValue * get(CodeGenerationContext * ctxt, 
+				    llvm::Value * val, 
+				    IQLToLLVMValue::ValueType globalOrLocal);
+  static const IQLToLLVMValue * get(CodeGenerationContext * ctxt, 
+				    llvm::Value * val,
+				    llvm::Value * nv,
+				    IQLToLLVMValue::ValueType globalOrLocal);
+};
+
+class IQLToLLVMTypedValue
+{
+private:
+  const IQLToLLVMValue * mValue;
+  const FieldType * mType;
+public:
+  IQLToLLVMTypedValue(const IQLToLLVMValue * value=NULL, const FieldType * ty=NULL)
+    :
+    mValue(value),
+    mType(ty)
+  {
+  }
+
+  const IQLToLLVMValue * getValue() const {
+    return mValue; 
+  }
+  const FieldType * getType() const {
+    return mType;
+  }
 };
 
 /**
@@ -138,7 +157,7 @@ public:
    * Retrieve the current pointer to value without retrieving
    * the NULL bit.
    */  
-  virtual IQLToLLVMValueRef getValuePointer(CodeGenerationContext * ctxt) const =0;
+  virtual const IQLToLLVMValue * getValuePointer(CodeGenerationContext * ctxt) const =0;
   /**
    * Retrieve pointer to the value + the current value of
    * the NULL bit.
@@ -169,7 +188,7 @@ public:
 		 const std::string& memberName,
 		 llvm::Value * basePointer);
   ~IQLToLLVMField();
-  IQLToLLVMValueRef getValuePointer(CodeGenerationContext * ctxt) const;
+  const IQLToLLVMValue * getValuePointer(CodeGenerationContext * ctxt) const;
   const IQLToLLVMValue * getEntirePointer(CodeGenerationContext * ctxt) const;
   void setNull(CodeGenerationContext * ctxt, bool isNull) const;
   bool isNullable() const;
@@ -187,7 +206,7 @@ public:
 
   ~IQLToLLVMLocal();
 
-  IQLToLLVMValueRef getValuePointer(CodeGenerationContext * ctxt) const;
+  const IQLToLLVMValue * getValuePointer(CodeGenerationContext * ctxt) const;
   const IQLToLLVMValue * getEntirePointer(CodeGenerationContext * ctxt) const;
   llvm::Value * getNullBitPointer() const;
   void setNull(CodeGenerationContext * ctxt, bool isNull) const;
@@ -277,8 +296,18 @@ public:
    * amount of memory used during SSA creation (Mem2Reg pass).
    */
   typedef std::map<const llvm::Type*, 
-		   std::vector<const llvm::Value *> > local_cache;
+		   std::vector<llvm::Value *> > local_cache;
   
+  typedef IQLToLLVMValue::ValueType (CodeGenerationContext::*UnaryOperatorMemFn) (const IQLToLLVMValue * lhs, 
+										  const FieldType * lhsType, 
+										  llvm::Value * ret,
+										  const FieldType * retType);
+  typedef IQLToLLVMValue::ValueType (CodeGenerationContext::*BinaryOperatorMemFn) (const IQLToLLVMValue * lhs, 
+										   const FieldType * lhsType, 
+										   const IQLToLLVMValue * rhs, 
+										   const FieldType * rhsType,
+										   llvm::Value * ret,
+										   const FieldType * retType);
 private:
   bool mOwnsModule;
   class TreculSymbolTable * mSymbolTable;
@@ -293,6 +322,101 @@ private:
    * Private Interface to the VARCHAR datatype.
    */
   llvm::Value * buildVarcharIsSmall(llvm::Value * varcharPtr);
+
+  /**
+   * Add INTERVAL and DATE/DATETIME.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildDateAdd(const IQLToLLVMValue * lhs, 
+					 const FieldType * lhsType, 
+					 const IQLToLLVMValue * rhs, 
+					 const FieldType * rhsType, 
+					 llvm::Value * ret, 
+					 const FieldType * retType);
+
+  /**
+   * Add CHAR(M) and CHAR(N).  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCharAdd(const IQLToLLVMValue * lhs, 
+					 const FieldType * lhsType, 
+					 const IQLToLLVMValue * rhs, 
+					 const FieldType * rhsType, 
+					 llvm::Value * ret, 
+					 const FieldType * retType);
+
+  /**
+   * Wrap a unary operation in the canonical NULL handling code
+   * which says that a result is NULL if its argument is.
+   */
+  const IQLToLLVMValue * buildNullableUnaryOp(const IQLToLLVMValue * lhs, 
+					      const FieldType * lhsType, 
+					      const FieldType * resultType,
+					      UnaryOperatorMemFn unOp);
+  /**
+   * Wrap a unary operation in a wrapper that doesn't modify the null bit
+   * and assumes that argument is in fact not null.
+   * This method is useful for using a UnaryOperationMemFn inside another
+   * UnaryOperationMemFn or BinaryOperationMemFn in those cases that the 
+   * outer wrapper is already dealing with the null bit.
+   */
+  const IQLToLLVMValue * buildNonNullableUnaryOp(const IQLToLLVMValue * lhs, 
+					      const FieldType * lhsType, 
+					      const FieldType * resultType,
+					      UnaryOperatorMemFn unOp);
+
+  /**
+   * Wrap a binary operation in the canonical NULL handling code
+   * which says that a result is NULL if either of its argument are.
+   */
+  const IQLToLLVMValue * buildNullableBinaryOp(const IQLToLLVMValue * lhs, 
+					       const FieldType * lhsType, 
+					       const IQLToLLVMValue * rhs, 
+					       const FieldType * rhsType, 
+					       const FieldType * resultType,
+					       BinaryOperatorMemFn binOp);
+  void buildMemcpy(llvm::Value * sourcePtr,
+		   const FieldAddress& sourceOffset,
+		   llvm::Value * targetPtr, 
+		   const FieldAddress& targetOffset,
+		   int64_t sz);
+  void buildMemcpy(const std::string& sourceArg,
+		   const FieldAddress& sourceOffset,
+		   const std::string& targetArg, 
+		   const FieldAddress& targetOffset,
+		   int64_t sz);
+  void buildMemset(llvm::Value * targetPtr,
+		   const FieldAddress& targetOffset,
+		   int8_t value,
+		   int64_t sz);
+  llvm::Value * buildMemcmp(llvm::Value * sourcePtr,
+			    const FieldAddress& sourceOffset,
+			    llvm::Value * targetPtr, 
+			    const FieldAddress& targetOffset,
+			    int64_t sz);
+  void buildBitcpy(const BitcpyOp& op,
+		   llvm::Value * sourcePtr,
+		   llvm::Value * targetPtr);
+  void buildBitset(const BitsetOp& op,
+		   llvm::Value * targetPtr);
+  // Copy all of the fields matching a regex
+  void buildSetFieldsRegex(const std::string& sourceName,
+			   const RecordType * sourceType,
+			   const std::string& expr,
+			   const std::string& rename,
+			   const std::string& recordName,
+			   int * pos);
+
+
+  // How does this code generator treat values of types? Does it pass them
+  // around as values or does it pass references around.
+  static bool isValueType(const FieldType *);
+  // Is val a pointer to value of type ft?
+  static bool isPointerToValueType(llvm::Value * val, const FieldType * ft);
+  static llvm::Value * trimAlloca(llvm::Value * result, const FieldType * resultTy);
+
+  static bool isChar(llvm::Type * ty);
+  static bool isChar(llvm::Value * val);
+  static int32_t getCharArrayLength(llvm::Type * ty);
+  static int32_t getCharArrayLength(llvm::Value * val);
 
 public:
   LLVMContextRef LLVMContext;
@@ -392,7 +516,7 @@ public:
    * Get pointer to the execution context argument as
    * an LLVM C wrapper datatype.
    */
-  LLVMValueRef getContextArgumentRef();
+  llvm::Value * getContextArgumentRef();
 
   /**
    * Initialize the members of code generation that correspond
@@ -445,6 +569,12 @@ public:
 				    llvm::Type * funTy);
 
   /**
+   * Local variable
+   */
+  void buildDeclareLocal(const char * nm, const FieldType * ft);
+  void buildLocalVariable(const char * nm, const IQLToLLVMValue * init, const FieldType * ft);
+
+  /**
    * Build a while loop.
    * 
    * To use this:
@@ -471,49 +601,159 @@ public:
   /**
    * Build an array expression
    */
-  const IQLToLLVMValue * buildArray(std::vector<const IQLToLLVMValue *>& vals,
+  const IQLToLLVMValue * buildArray(std::vector<IQLToLLVMTypedValue>& vals,
 				    FieldType * arrayTy);
-  const IQLToLLVMValue * buildGlobalConstArray(std::vector<const IQLToLLVMValue *>& vals,
+  const IQLToLLVMValue * buildGlobalConstArray(std::vector<IQLToLLVMTypedValue>& vals,
 					       FieldType * arrayTy);
+
+  /**
+   * Reference an element of an array
+   */
+  const IQLToLLVMValue * buildArrayRef(const char * var,
+				       const IQLToLLVMValue * idx,
+				       const FieldType * elementTy);
+  /**
+   * Build an lvalue from a position in an array.
+   */
+  const IQLToLLVMLValue * buildArrayLValue(const char * var,
+					   const IQLToLLVMValue * idx);
 
   /**
    * Call a function.
    */
   IQLToLLVMValue::ValueType buildCall(const char * f,
-				      const std::vector<const IQLToLLVMValue *> & args,
+				      const std::vector<IQLToLLVMTypedValue> & args,
 				      llvm::Value * retTmp,
 				      const FieldType * retType);
+  const IQLToLLVMValue * buildCall(const char * f,
+				   const std::vector<IQLToLLVMTypedValue> & args,
+				   const FieldType * retType);
   /**
    * Cast non null value to INT32.  Put return value in ret.
    */
   IQLToLLVMValue::ValueType buildCastInt32(const IQLToLLVMValue * e, 
-					   const FieldType * argAttrs, 
+					   const FieldType * argType, 
 					   llvm::Value * ret, 
-					   const FieldType * retAttrs);
+					   const FieldType * retType);
+  const IQLToLLVMValue * buildCastInt32(const IQLToLLVMValue * e, 
+					const FieldType * argType, 
+					const FieldType * retType);
 
   /**
    * Cast non null value to INT64.  Put return value in ret.
    */
   IQLToLLVMValue::ValueType buildCastInt64(const IQLToLLVMValue * e, 
-					   const FieldType * argAttrs, 
+					   const FieldType * argType, 
 					   llvm::Value * ret, 
-					   const FieldType * retAttrs);
+					   const FieldType * retType);
+  const IQLToLLVMValue * buildCastInt64(const IQLToLLVMValue * e, 
+					const FieldType * argType, 
+					const FieldType * retType);
 
   /**
    * Cast non null value to DOUBLE.  Put return value in ret.
    */
   IQLToLLVMValue::ValueType buildCastDouble(const IQLToLLVMValue * e, 
-					    const FieldType * argAttrs, 
+					    const FieldType * argType, 
 					    llvm::Value * ret, 
-					    const FieldType * retAttrs);
+					    const FieldType * retType);
+  const IQLToLLVMValue * buildCastDouble(const IQLToLLVMValue * e, 
+					 const FieldType * argType, 
+					 const FieldType * retType);
 
   /**
    * Cast non null value to DECIMAL.  Put return value in ret.
    */
   IQLToLLVMValue::ValueType buildCastDecimal(const IQLToLLVMValue * e, 
-					     const FieldType * argAttrs, 
+					     const FieldType * argType, 
 					     llvm::Value * ret, 
-					     const FieldType * retAttrs);
+					     const FieldType * retType);
+  const IQLToLLVMValue * buildCastDecimal(const IQLToLLVMValue * e, 
+					  const FieldType * argType, 
+					  const FieldType * retType);
+
+  /**
+   * Cast non null value to DATE.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCastDate(const IQLToLLVMValue * e, 
+					  const FieldType * argType, 
+					  llvm::Value * ret, 
+					  const FieldType * retType);
+  const IQLToLLVMValue * buildCastDate(const IQLToLLVMValue * e, 
+				       const FieldType * argType, 
+				       const FieldType * retType);
+
+  /**
+   * Cast non null value to DATETIME.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCastDatetime(const IQLToLLVMValue * e, 
+					      const FieldType * argType, 
+					      llvm::Value * ret, 
+					      const FieldType * retType);
+  const IQLToLLVMValue * buildCastDatetime(const IQLToLLVMValue * e, 
+					   const FieldType * argType, 
+					   const FieldType * retType);
+
+  /**
+   * Cast non null value to CHAR(N).  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCastChar(const IQLToLLVMValue * e, 
+					     const FieldType * argType, 
+					     llvm::Value * ret, 
+					     const FieldType * retType);
+  const IQLToLLVMValue * buildCastChar(const IQLToLLVMValue * e, 
+					  const FieldType * argType, 
+					  const FieldType * retType);
+
+  /**
+   * Cast non null value to VARCHAR.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCastVarchar(const IQLToLLVMValue * e, 
+					     const FieldType * argType, 
+					     llvm::Value * ret, 
+					     const FieldType * retType);
+  const IQLToLLVMValue * buildCastVarchar(const IQLToLLVMValue * e, 
+					  const FieldType * argType, 
+					  const FieldType * retType);
+
+  /**
+   * Cast non null value from one type to another.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildCast(const IQLToLLVMValue * e, 
+				      const FieldType * argType, 
+				      llvm::Value * ret, 
+				      const FieldType * retType);
+  /**
+   * Cast a value from one type to another taking NULL values into consideration
+   */
+  const IQLToLLVMValue * buildCast(const IQLToLLVMValue * e, 
+				   const FieldType * argType, 
+				   const FieldType * retType);
+
+  /**
+   * Cast a non-null value from one type (perhaps nullable) to another (doesn't
+   * handle null bits).  This method is useful for type promotion inside of
+   * UnaryOperationMemFns and BinaryOperationMemFns in which case the wrapper
+   * is dealing with the null bit.
+   */
+  const IQLToLLVMValue * buildCastNonNullable(const IQLToLLVMValue * e, 
+					      const FieldType * argType, 
+					      const FieldType * retType);
+
+  /**
+   * Add rhs to lhs.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildAdd(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildAdd(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
 
   /**
    * Subtract rhs from lhs.  Put return value in ret.
@@ -524,109 +764,368 @@ public:
 				     const FieldType * rhsType, 
 				     llvm::Value * ret, 
 				     const FieldType * retType);
+  const IQLToLLVMValue * buildSub(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
 
   /**
-   * Add INTERVAL and DATE/DATETIME.  Put return value in ret.
+   * Multiply rhs and lhs.  Put return value in ret.
    */
-  IQLToLLVMValue::ValueType buildDateAdd(const IQLToLLVMValue * lhs, 
-					 const FieldType * lhsType, 
-					 const IQLToLLVMValue * rhs, 
-					 const FieldType * rhsType, 
-					 llvm::Value * ret, 
-					 const FieldType * retType);
+  IQLToLLVMValue::ValueType buildMul(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildMul(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
 
+  /**
+   * Divide lhs by rhs.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildDiv(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildDiv(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
+
+  /**
+   * Remainder of division of lhs by rhs.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildMod(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildMod(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
+
+  /**
+   * Negate an expression.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildNegate(const IQLToLLVMValue * lhs,
+					const FieldType * lhsTy,
+					llvm::Value * ret,
+					const FieldType * retTy);
+  const IQLToLLVMValue * buildNegate(const IQLToLLVMValue * e, 
+				     const FieldType * argType, 
+				     const FieldType * retType);
+  /**
+   * Bitwise and.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildBitwiseAnd(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildBitwiseAnd(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
+
+  /**
+   * Bitwise or.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildBitwiseOr(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildBitwiseOr(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
+
+  /**
+   * Bitwise xor.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildBitwiseXor(const IQLToLLVMValue * lhs, 
+				     const FieldType * lhsType, 
+				     const IQLToLLVMValue * rhs, 
+				     const FieldType * rhsType, 
+				     llvm::Value * ret, 
+				     const FieldType * retType);
+  const IQLToLLVMValue * buildBitwiseXor(const IQLToLLVMValue * lhs, 
+				  const FieldType * lhsType, 
+				  const IQLToLLVMValue * rhs, 
+				  const FieldType * rhsType, 
+				  const FieldType * retType);
+
+  /**
+   * Bitwise not.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildBitwiseNot(const IQLToLLVMValue * lhs,
+					    const FieldType * lhsTy,
+					    llvm::Value * ret,
+					    const FieldType * retTy);
+  const IQLToLLVMValue * buildBitwiseNot(const IQLToLLVMValue * e, 
+					 const FieldType * argType, 
+					 const FieldType * retType);
   /**
    * Interface to the VARCHAR datatype.
    */
   llvm::Value * buildVarcharGetSize(llvm::Value * varcharPtr);
   llvm::Value * buildVarcharGetPtr(llvm::Value * varcharPtr);
-};
 
 
-/**   
- * Create a mutable variable by doing an alloca in the entry block of the function.
- */
-LLVMValueRef LLVMCreateEntryBlockAlloca(CodeGenerationContext * ctxt, 
-					LLVMTypeRef ty, const char * name);
-/**
- * Create a local llvm value.
- */
-IQLToLLVMValueRef IQLToLLVMCreateLocalValue(CodeGenerationContext * ctxt, LLVMValueRef val);
+  /**
+   * Reuse of local variables so that we don't put too much pressure
+   * on mem2reg to eliminate them.
+   */
+  llvm::Value * getCachedLocal(llvm::Type * ty);
+  void returnCachedLocal(llvm::Value * v);
+
+  /**   
+   * Create a mutable variable by doing an alloca in the entry block of the function.
+   */
+  llvm::Value * buildEntryBlockAlloca(llvm::Type * ty, 
+				      const char * name);
+
+  /**
+   * Assignment
+   */
+
+  // This method sets a value that is assumed to be non-null and type promoted.
+  void buildSetValue2(const IQLToLLVMValue * iqlVal,
+		      const IQLToLLVMValue * iqllvalue,
+		      const FieldType * ft);
+  // This method sets a possibly null value that is type promoted
+  void buildSetNullableValue(const IQLToLLVMLValue * lval,
+			     const IQLToLLVMValue * val,
+			     const FieldType * ft,
+			     bool allowNullToNonNull);
+  // This method sets a possible null value to a variable loc which is assumed to be of the
+  // correct type (this method doesn't do type promotion either).
+  void buildSetValue(const IQLToLLVMValue * iqlVal, const char * loc, const FieldType * ft);
+  // This method sets a possible nullable value providing type promotion as needed
+  void buildSetNullableValue(const IQLToLLVMLValue * lval,
+			     const IQLToLLVMValue * val,
+			     const FieldType * valTy,
+			     const FieldType * lvalTy);
+
+  /**
+   * CASE statements
+   */
+  void buildCaseBlockBegin(const FieldType * caseType);
+  void buildCaseBlockIf(const IQLToLLVMValue * condVal);
+  void buildCaseBlockThen(const IQLToLLVMValue *value, const FieldType * valueType, const FieldType * caseType, bool allowNullToNonNull);
+  const IQLToLLVMValue * buildCaseBlockFinish(const FieldType * caseType);
+
+  /**
+   * LEAST(...) and GREATEST(...)
+   */
+  const IQLToLLVMValue * buildLeastGreatest(const std::vector<IQLToLLVMTypedValue> & args,
+					    const FieldType * retTy,
+					    bool isLeast);
   
-/**
- * Create a global llvm value.
- */
-IQLToLLVMValueRef IQLToLLVMCreateGlobalValue(CodeGenerationContext * ctxt, LLVMValueRef val);
+  /**
+   * IFNULL()
+   */
+  const IQLToLLVMValue * buildIsNullFunction(const std::vector<IQLToLLVMTypedValue> & args,
+					     const FieldType * retTy);
+
+  /**
+   * Implement e1 && e2 as CASE WHEN e1 THEN e2 ELSE false END for now.
+   */
+  void buildBeginAnd(const FieldType * retType);
+  void buildAddAnd(const IQLToLLVMValue * lhs,
+		   const FieldType * lhsType,
+		   const FieldType * retType);
+  const IQLToLLVMValue * buildAnd(const IQLToLLVMValue * rhs,
+				  const FieldType * rhsType,
+				  const FieldType * retType);
+
+  /**
+   * Implement e1 || e2 as CASE WHEN e1 THEN true ELSE e2 END for now.
+   */
+  void buildBeginOr(const FieldType * retType);
+  void buildAddOr(const IQLToLLVMValue * lhs,
+		  const FieldType * lhsType,
+		  const FieldType * retType);
+  const IQLToLLVMValue * buildOr(const IQLToLLVMValue * rhs,
+				 const FieldType * rhsType,
+				 const FieldType * retType);
+
+  /**
+   * Negate a logical expression.  Put return value in ret.
+   */
+  IQLToLLVMValue::ValueType buildNot(const IQLToLLVMValue * lhs,
+				     const FieldType * lhsTy,
+				     llvm::Value * ret,
+				     const FieldType * retTy);
+  const IQLToLLVMValue * buildNot(const IQLToLLVMValue * e, 
+				  const FieldType * argType, 
+				  const FieldType * retType);
+  /**
+   * IS NULL predicate
+   */
+  const IQLToLLVMValue * buildIsNull(const IQLToLLVMValue * val);
+  const IQLToLLVMValue * buildIsNull(const IQLToLLVMValue * lhs,
+				     const FieldType * lhsType, const FieldType * retType, int isNotNull);
+
+  /**
+   * binary comparisons
+   */
+  IQLToLLVMValue::ValueType buildVarcharCompare(llvm::Value * e1, 
+						llvm::Value * e2,
+						llvm::Value * ret,
+						IQLToLLVMPredicate opCode);
+  // Comparison of non null values
+  IQLToLLVMValue::ValueType buildCompare(const IQLToLLVMValue * lhs, 
+					 const FieldType * lhsType, 
+					 const IQLToLLVMValue * rhs, 
+					 const FieldType * rhsType,
+					 llvm::Value * ret,
+					 const FieldType * retType,
+					 IQLToLLVMPredicate op);
+  // Template to make members suitable for buildNullableBinaryOp
+  template <IQLToLLVMPredicate _Op>
+  IQLToLLVMValue::ValueType buildCompare(const IQLToLLVMValue * lhs, 
+					 const FieldType * lhsType, 
+					 const IQLToLLVMValue * rhs, 
+					 const FieldType * rhsType,
+					 llvm::Value * ret,
+					 const FieldType * retType)
+  {
+    return buildCompare(lhs, lhsType, rhs, rhsType, ret, retType, _Op);
+  }
+
+  const IQLToLLVMValue * buildCompare(const IQLToLLVMValue * lhs, 
+				      const FieldType * lhsType, 
+				      const IQLToLLVMValue * rhs, 
+				      const FieldType * rhsType,
+				      const FieldType * resultType,
+				      IQLToLLVMPredicate op);
+
+  /**
+   * Hash a sequence of values
+   */
+  const IQLToLLVMValue * buildHash(const std::vector<IQLToLLVMTypedValue> & args);
+
+  /**
+   * Create a poor man's normalized key out of a sequence of sort keys
+   */
+  const IQLToLLVMValue * buildSortPrefix(const IQLToLLVMValue * arg, const FieldType * argTy);
+  const IQLToLLVMValue * buildSortPrefix(const std::vector<IQLToLLVMTypedValue> & args,
+					 const FieldType * retTy);
+
+  /**
+   * RETURN from a function
+   */
+  void buildReturnValue(const IQLToLLVMValue * iqlVal, const FieldType * retType);
+
+  /**
+   * ?:
+   */
+  void buildBeginIfThenElse(const IQLToLLVMValue * condVal);
+  void buildElseIfThenElse();
+  const IQLToLLVMValue * buildEndIfThenElse(const IQLToLLVMValue * thenVal, const FieldType * thenTy,
+					    const IQLToLLVMValue * elseVal, const FieldType * elseTy,
+					    const FieldType * retTy);
+
+  /**
+   * SWITCH statements
+   */
+  void buildBeginSwitch();
+  void buildEndSwitch(const IQLToLLVMValue * switchExpr);
+  void buildBeginSwitchCase(const char * caseVal);
+  void buildEndSwitchCase();
+
+  /**
+   * INTERVAL type constructor
+   */
+  const IQLToLLVMValue * buildInterval(const char * intervalType,
+				       const  IQLToLLVMValue * e);
+  /**
+   * Literals
+   */
+  const IQLToLLVMValue * buildDateLiteral(const char * val);
+  const IQLToLLVMValue * buildDatetimeLiteral(const char * val);
+  const IQLToLLVMValue * buildDecimalInt32Literal(const char * val);
+  const IQLToLLVMValue * buildDecimalInt64Literal(const char * val);
+  const IQLToLLVMValue * buildDoubleLiteral(const char * val);
+  const IQLToLLVMValue * buildVarcharLiteral(const char * val);
+  const IQLToLLVMValue * buildDecimalLiteral(const char * val);
+  const IQLToLLVMValue * buildTrue();
+  const IQLToLLVMValue * buildFalse();
+  const IQLToLLVMValue * buildNull();
+
+  /**
+   * In lieu of general constant folding make sure that cast of string
+   * to date works
+   */
+  const IQLToLLVMValue * buildLiteralCast(const char * val,
+					  const char * typeName);
+
+  /**
+   * Aggregate function support
+   */
+  const IQLToLLVMValue * buildAggregateFunction(const char * fn,
+						const IQLToLLVMValue * e,
+						const FieldType * retTy);
   
-/**
- * Create a global nullable llvm value.
- */
-IQLToLLVMValueRef IQLToLLVMCreateNullableGlobalValue(CodeGenerationContext * ctxt, LLVMValueRef val, LLVMValueRef nv);
 
-void IQLToLLVMBuildSetNullableValue(CodeGenerationContext * ctxt,
-				    const IQLToLLVMLValue * lval,
-				    IQLToLLVMValueRef val);
-void IQLToLLVMBuildSetNullableValue(CodeGenerationContext * ctxt,
-				    const IQLToLLVMLValue * lval,
-				    IQLToLLVMValueRef val,
-				    bool allowNullToNonNull);
+  /**
+   * Record Construction
+   */
 
-void IQLToLLVMVarcharSetSize(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr, LLVMValueRef sz);
-void IQLToLLVMVarcharSetPtr(CodeGenerationContext * ctxt, LLVMValueRef varcharPtr, LLVMValueRef sz);
+  // This logic identifies LLVM values that are direct references 
+  // to an input record.  The purpose here is to identify transfers
+  // that are actually identity functions.  The point is that there
+  // are cases in which knowing a transfer is identity may allow a
+  // record buffer to be passed through without modification thus
+  // completely bypassing memory allocation and transfer code.
+  // References to fields may be reference or value.
+  void buildSetField(int * pos, const IQLToLLVMValue * val);
+  // Copy all of the field (same as regex .* unless in the
+  // broken "move semantics" mode).
+  void buildSetFields(const char * recordName, int * pos);
+  void buildQuotedId(const char * quotedId, const char * rename, int * pos);
 
-class IQLToLLVMTypePredicate
-{
-public:
-  static bool isChar(LLVMTypeRef ty);
-  static bool isChar(LLVMValueRef val);
-  static bool isArrayType(LLVMTypeRef ty);
-  static bool isArrayType(LLVMValueRef val);
+  // Should we make these private as some point?
+  /**
+   * Make the result of an LLVM compare into the result of an IQL compare 
+   */
+  const IQLToLLVMValue * buildCompareResult(llvm::Value * boolVal);
+  IQLToLLVMValue::ValueType buildCompareResult(llvm::Value * boolVal,
+					       llvm::Value * ret);
+  const IQLToLLVMValue * buildRef(const IQLToLLVMValue * allocAVal, const FieldType * retTy);
+  const IQLToLLVMValue * buildVariableRef(const char * var,
+					  const char * var2,
+					  const FieldType * varTy);
+  
 };
 
-class IQLToLLVMBinaryConversion
-{
-private:
-  static IQLToLLVMValueRef convertIntToDec(CodeGenerationContext * ctxt,
-					   LLVMValueRef llvmVal,
-					   bool isInt64);
-  static IQLToLLVMValueRef convertDecToDouble(CodeGenerationContext * ctxt,
-					      LLVMValueRef llvmVal);
-
-public:
-  /**
-   * Can e1 be cast to e2?
-   */
-  static LLVMTypeRef castTo(CodeGenerationContext * ctxt, LLVMTypeRef e1, LLVMTypeRef e2);
-  /**
-   * Can e1 be cast to e2 or vice versa?
-   */
-  static LLVMTypeRef leastCommonType(CodeGenerationContext * ctxt, LLVMTypeRef e1, LLVMTypeRef e2);
-  /**
-   * Convert a value to the target type.
-   */
-  static IQLToLLVMValueRef convertTo(CodeGenerationContext * ctxt, 
-				     IQLToLLVMValueRef v, 
-				     const FieldType * ty);
-  static IQLToLLVMValueRef convertTo(CodeGenerationContext * ctxt, 
-				     IQLToLLVMValueRef v, 
-				     LLVMTypeRef e2);
-private:
-  IQLToLLVMValueRef mLHS;
-  IQLToLLVMValueRef mRHS;
-  LLVMTypeRef mResultType;
-public:
-  IQLToLLVMBinaryConversion(CodeGenerationContext * ctxt, IQLToLLVMValueRef lhs, IQLToLLVMValueRef rhs);
-
-  IQLToLLVMValueRef getLHS() { return mLHS; }
-  IQLToLLVMValueRef getRHS() { return mRHS; }
-  LLVMTypeRef getResultType() { return mResultType; }
-};
-
-class IQLToLLVMTypeInspector
+class AggregateFunction
 {
 public:
-  static int32_t getCharArrayLength(LLVMTypeRef ty);
-  static int32_t getCharArrayLength(LLVMValueRef val);
+  static boost::shared_ptr<AggregateFunction> get(const char * fn);
+  virtual ~AggregateFunction() {}
+  virtual void update(CodeGenerationContext * ctxt,
+		      const std::string& old,
+		      const IQLToLLVMValue * inc,
+		      const FieldType * ft) =0;
+  virtual const IQLToLLVMValue * initialize(CodeGenerationContext * ctxt,
+					    const FieldType * ft) =0;
 };
 
 #endif

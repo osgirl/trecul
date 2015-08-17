@@ -2128,7 +2128,7 @@ void LLVMBase::ConstructFunction(const std::string& funName,
   LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlockInContext(mContext->LLVMContext, mContext->LLVMFunction, "EntryBlock");
   LLVMPositionBuilderAtEnd(mContext->LLVMBuilder, entryBlock);
   for(unsigned int i = 0; i<argumentNames.size(); i++) {
-    LLVMValueRef allocAVal = LLVMCreateEntryBlockAlloca(mContext, argumentTypes[i], argumentNames[i]);
+    LLVMValueRef allocAVal = llvm::wrap(mContext->buildEntryBlockAlloca(llvm::unwrap(argumentTypes[i]), argumentNames[i]));
     LLVMValueRef arg = LLVMGetParam(mContext->LLVMFunction, i);
     mContext->defineVariable(argumentNames[i], llvm::unwrap(allocAVal),
 			     NULL, IQLToLLVMValue::eGlobal);
@@ -3478,9 +3478,9 @@ RecordTypeAggregate::RecordTypeAggregate(DynamicRecordContext& recCtxt,
  for(std::vector<std::string>::const_iterator it = groupKeys.begin();
      it != groupKeys.end();
      ++it) {
-   LLVMSetField(wrap(mContext),
-		&mContext->AggFn, 
-		IQLToLLVMBuildVariableRef(wrap(mContext), it->c_str(), NULL));
+   mContext->buildSetField(&mContext->AggFn, 
+			   mContext->buildVariableRef(it->c_str(), NULL, mSource->getMember(*it).GetType()));
+
  }
  // We know that aggregate initialization isn't
  // identity.  Reset the flag so we can find out

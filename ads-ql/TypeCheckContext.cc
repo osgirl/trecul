@@ -658,15 +658,82 @@ const FieldType * TypeCheckContext::buildArrayRef(const char * nm,
   }
 }
 
+const FieldType * TypeCheckContext::buildCall(const char * f, std::vector<const FieldType *> & args)
+{
+  // Check for intrinsics
+  if (boost::algorithm::iequals(f, "least") ||
+      boost::algorithm::iequals(f, "greatest")) {
+    return buildLeast(args);
+  } else if (boost::algorithm::iequals(f, "isnull") ||
+	     boost::algorithm::iequals(f, "ifnull")) {
+    return buildIsNull(args);
+  }
+  // TODO: Implement operator/function overloading.
+  const FieldType * fType = lookupType(f, NULL);
+  if (fType == NULL || fType->GetEnum() != FieldType::FUNCTION)
+    throw std::runtime_error((boost::format("Undefined function in call %1%") %
+			      f).str());
+  const FunctionType * funType = static_cast<const FunctionType *>(fType);
+  if (funType->GetArgs().size() !=  args.size())
+    throw std::runtime_error((boost::format("Function %1% takes %2% arguments") %
+			      f %
+			      funType->GetArgs().size()).str());
+  for(std::size_t i=0; i<args.size(); ++i) {
+    const FieldType * formalTy = funType->GetArgs()[i];
+    const FieldType * ty = castTo(args[i], formalTy);
+    if (ty == NULL)
+      throw std::runtime_error((boost::format("Argument %1% of function %2% type mismatch; expected %3% received %4%") %
+				i % f % formalTy->toString() %
+				args[i]->toString()).str());
+  }
+  return funType->GetReturn();
+}
+
+const FieldType * TypeCheckContext::buildHash(std::vector<const FieldType *> & ty)
+{
+  // For the moment, we can hash anything.  Always returns an integer.
+  return buildInt32Type();
+}
+
+const FieldType * TypeCheckContext::buildSortPrefix(std::vector<const FieldType *> & ty) 
+{
+  // For the moment, we can sort anything.  Always returns an integer.
+  return buildInt32Type();
+}
+
+const FieldType * TypeCheckContext::buildNegate(const FieldType * ty)
+{
+  // Get corresponding non NULL type for checking.
+  if (!ty->isNumeric())
+    throw std::runtime_error("Type check error: expected numeric type");
+  return ty;
+}
+
 const FieldType * TypeCheckContext::buildAdd(const FieldType * lhs,
 					     const FieldType * rhs)
 {
   bool nullable = lhs->isNullable() || rhs->isNullable();
-  if (rhs->GetEnum() == FieldType::DATE) {
-    std::swap(lhs, rhs);
+  if ((lhs->GetEnum() == FieldType::DATETIME && rhs->GetEnum() == FieldType::INTERVAL) ||
+      (rhs->GetEnum() == FieldType::DATETIME && lhs->GetEnum() == FieldType::INTERVAL)) {
+    return buildDatetimeType(nullable);
+  } else if ((lhs->GetEnum() == FieldType::DATE && rhs->GetEnum() == FieldType::INTERVAL) ||
+      (rhs->GetEnum() == FieldType::DATE && lhs->GetEnum() == FieldType::INTERVAL)) {
+    if (rhs->GetEnum() == FieldType::DATE) {
+      std::swap(lhs, rhs);
+    }
+    const IntervalType * it = static_cast<const IntervalType *>(rhs);
+    return it->getDateResultType(mContext, nullable);  
+  } else if (lhs->GetEnum() == FieldType::CHAR && rhs->GetEnum()==FieldType::CHAR) {
+    std::string retSz = boost::lexical_cast<std::string>(lhs->GetSize() + 
+							 rhs->GetSize());
+    return buildCharType(retSz.c_str(), nullable);
+  } else {
+    const FieldType * ty = leastCommonTypeNullable(lhs, rhs);
+    if(ty == NULL || (!ty->isNumeric() && !ty->GetEnum() == FieldType::VARCHAR && !ty->GetEnum() == FieldType::CHAR)) {
+      throw std::runtime_error("Can only add numeric and string fields");
+    }
+    return ty;
   }
-  const IntervalType * it = static_cast<const IntervalType *>(rhs);
-  return it->getDateResultType(mContext, nullable);  
 }
 
 const FieldType * TypeCheckContext::buildSub(const FieldType * lhs,
@@ -681,7 +748,7 @@ const FieldType * TypeCheckContext::buildSub(const FieldType * lhs,
     return it->getDateResultType(mContext, nullable);  
   } else if (lhs->GetEnum() == FieldType::DATETIME) {
     if (rhs->GetEnum() != FieldType::INTERVAL) {
-      throw std::runtime_error("Can only subtract INTERVAL from DATE");
+      throw std::runtime_error("Can only subtract INTERVAL from DATETIME");
     }
     const IntervalType * it = static_cast<const IntervalType *>(rhs);
     return buildDatetimeType(nullable);
@@ -692,6 +759,16 @@ const FieldType * TypeCheckContext::buildSub(const FieldType * lhs,
     }
     return ty;
   }
+}
+
+const FieldType * TypeCheckContext::buildMul(const FieldType * lhs,
+					     const FieldType * rhs)
+{
+  const FieldType * ty = leastCommonTypeNullable(lhs, rhs);
+  if(ty == NULL || !ty->isNumeric()) {
+    throw std::runtime_error("Can only multiply numeric fields");
+  }
+  return ty;
 }
 
 const FieldType * TypeCheckContext::buildModulus(const FieldType * lhs,
@@ -723,6 +800,65 @@ const FieldType * TypeCheckContext::buildBitwise(const FieldType * lhs)
       ret->clone(true) != Int64Type::Get(mContext, true))
     throw std::runtime_error("Argument to bitwise operator must be integer");
   return ret;
+}
+
+const FieldType * TypeCheckContext::buildEquals(const FieldType * lhs, 
+						const FieldType * rhs)
+{
+  // In the future we may have types that we can compare for equality but not otherwise
+  buildCompare(lhs, rhs);
+}
+
+const FieldType * TypeCheckContext::buildCompare(const FieldType * lhs, 
+						 const FieldType * rhs)
+{
+  const FieldType * ret = leastCommonTypeNullable(lhs, rhs);
+  if (ret == NULL) 
+    throw std::runtime_error((boost::format("Type check error: cannot compare "
+					    "expressions of type %1% and %2%")
+			      % lhs->toString() 
+			      % rhs->toString()).str());
+  return buildBooleanType(ret->isNullable());
+}
+
+const FieldType * TypeCheckContext::buildLogicalAnd(const FieldType * lhs, 
+						    const FieldType * rhs)
+{
+  // Must be bool (currently int32_t for hacky reasons).
+  const FieldType * bType = buildBooleanType(true);
+  // Check type without regard to nullability
+  if (lhs->clone(true) != bType || rhs->clone(true) != bType)
+    throw std::runtime_error("Expected boolean expression");
+  bool isNullable = lhs->isNullable() || rhs->isNullable();
+  return bType->clone(isNullable);
+}
+
+const FieldType * TypeCheckContext::buildLogicalNot(const FieldType * lhs)
+{
+  const FieldType * bType = buildBooleanType(true);
+  if (lhs->clone(true) != bType)
+    throw std::runtime_error("Expected boolean expression");
+  return lhs;
+}
+
+const FieldType * TypeCheckContext::buildLike(const FieldType * lhs, 
+					      const FieldType * rhs)
+{
+  if (lhs->GetEnum() != FieldType::VARCHAR) {
+    throw std::runtime_error("Expected varchar expression for left hand side of RLIKE expression");
+  }
+  if (rhs->GetEnum() != FieldType::VARCHAR) {
+    throw std::runtime_error("Expected varchar expression for right hand side of RLIKE expression");
+  }
+  const bool isNullable = lhs->isNullable() || rhs->isNullable();
+  return buildBooleanType(isNullable);
+}
+
+const FieldType * TypeCheckContext::buildCast(const FieldType * lhs, 
+					      const FieldType * target)
+{
+  bool isNullable = target->isNullable() || lhs->isNullable();
+  return target->clone(isNullable);
 }
 
 const FieldType * TypeCheckContext::buildInt32Type(bool nullable)
@@ -830,6 +966,26 @@ const FieldType * TypeCheckContext::buildIntervalSecond(const FieldType * ty)
 const FieldType * TypeCheckContext::buildIntervalYear(const FieldType * ty)
 {
   return internalBuildInterval(ty, IntervalType::YEAR);
+}
+
+const FieldType * TypeCheckContext::buildInterval(const char * intervalType, const FieldType * ty)
+{
+  if (boost::algorithm::iequals(intervalType, "day")) {
+    return buildIntervalDay(ty);
+  } else if (boost::algorithm::iequals(intervalType, "hour")) {
+    return buildIntervalHour(ty);
+  } else if (boost::algorithm::iequals(intervalType, "minute")) {
+    return buildIntervalMinute(ty);
+  } else if (boost::algorithm::iequals(intervalType, "month")) {
+    return buildIntervalMonth(ty);
+  } else if (boost::algorithm::iequals(intervalType, "second")) {
+    return buildIntervalSecond(ty);
+  } else if (boost::algorithm::iequals(intervalType, "year")) {
+    return buildIntervalYear(ty);
+  } else {
+    throw std::runtime_error("INTERVAL type must be one of DAY, HOUR, MINUTE, "
+			     "MONTH, SECOND or YEAR");
+  }
 }
 
 void TypeCheckContext::beginCase()

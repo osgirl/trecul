@@ -57,7 +57,7 @@ statement[IQLCodeGenerationContextRef ctxt]
 	| printStatement[$ctxt]
 	| ifStatement[$ctxt]
 	| statementBlock[$ctxt]
-	| ^(TK_RETURN (e = expression[$ctxt] { IQLToLLVMBuildReturnValue($ctxt, e.llvmVal); })?)
+	| ^(TK_RETURN (e = expression[$ctxt] { IQLToLLVMBuildReturnValue($ctxt, e.llvmVal, $e.start->u); })?)
 	| TK_BREAK
 	| TK_CONTINUE
 	| ^(TK_RAISERROR expression[$ctxt] expression[$ctxt]?)
@@ -76,7 +76,7 @@ variableDeclaration [IQLCodeGenerationContextRef ctxt]
 setStatement[IQLCodeGenerationContextRef ctxt]
 	:
 	^(c=TK_SET lvalue = variableReference[$ctxt] rvalue = expression[$ctxt]) {
-            IQLToLLVMBuildSetNullableValue(ctxt, lvalue, rvalue.llvmVal, $c->u);
+            IQLToLLVMBuildSetNullableValue(ctxt, lvalue, rvalue.llvmVal, $rvalue.start->u, $c->u);
         }
 	;
 
@@ -129,7 +129,7 @@ declareStatement[IQLCodeGenerationContextRef ctxt]
 
 returnExpression[IQLCodeGenerationContextRef ctxt]
     :
-    ^(TK_RETURN e = expression[$ctxt] { IQLToLLVMBuildReturnValue($ctxt, e.llvmVal); })
+    ^(TK_RETURN e = expression[$ctxt] { IQLToLLVMBuildReturnValue($ctxt, e.llvmVal, $e.start->u); })
     ;
 
 recordConstructor[IQLCodeGenerationContextRef ctxt]
@@ -190,8 +190,8 @@ expression[IQLCodeGenerationContextRef ctxt] returns [IQLToLLVMValueRef llvmVal,
     | ^(c = TK_AND { IQLToLLVMBeginAnd($ctxt, $c->u); } e1 = expression[$ctxt] { IQLToLLVMAddAnd($ctxt, e1.llvmVal, $e1.start->u, $c->u); } e2 = expression[$ctxt]  { $llvmVal = IQLToLLVMBuildAnd($ctxt, e2.llvmVal, $e2.start->u, $c->u); })
     | ^(c = TK_NOT e1 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildNot($ctxt, e1.llvmVal, $e1.start->u, $c->u); })
     | ^(c = TK_IS e1 = expression[$ctxt] (TK_NOT { isBinary = 1; })? { $llvmVal = IQLToLLVMBuildIsNull($ctxt, e1.llvmVal, $e1.start->u, $c->u, isBinary); })
-    | ^(c = TK_CASE { IQLToLLVMCaseBlockBegin($ctxt, $c->u); } (whenExpression[$ctxt, $c->u])+ elseExpression[$ctxt, $c->u] { $llvmVal = IQLToLLVMCaseBlockFinish($ctxt); } )
-    | ^('?' e1 = expression[$ctxt] { IQLToLLVMBeginIfThenElse($ctxt, e1.llvmVal); } e2 = expression[$ctxt] { IQLToLLVMElseIfThenElse($ctxt); } e3 = expression[$ctxt] { $llvmVal = IQLToLLVMEndIfThenElse($ctxt, e2.llvmVal, e3.llvmVal); })
+    | ^(c = TK_CASE { IQLToLLVMCaseBlockBegin($ctxt, $c->u); } (whenExpression[$ctxt, $c->u])+ elseExpression[$ctxt, $c->u] { $llvmVal = IQLToLLVMCaseBlockFinish($ctxt, $c->u); } )
+    | ^(c='?' e1 = expression[$ctxt] { IQLToLLVMBeginIfThenElse($ctxt, e1.llvmVal); } e2 = expression[$ctxt] { IQLToLLVMElseIfThenElse($ctxt); } e3 = expression[$ctxt] { $llvmVal = IQLToLLVMEndIfThenElse($ctxt, e2.llvmVal, $e2.start->u, e3.llvmVal, $e3.start->u, $c->u); })
     | ^(c='^' e1 = expression[$ctxt] e2 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildBitwiseXor($ctxt, e1.llvmVal, $e1.start->u, e2.llvmVal, $e2.start->u, $c->u); })
     | ^(c='|' e1 = expression[$ctxt] e2 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildBitwiseOr($ctxt, e1.llvmVal, $e1.start->u, e2.llvmVal, $e2.start->u, $c->u); })
     | ^(c='&' e1 = expression[$ctxt] e2 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildBitwiseAnd($ctxt, e1.llvmVal, $e1.start->u, e2.llvmVal, $e2.start->u, $c->u); })
@@ -233,8 +233,8 @@ expression[IQLCodeGenerationContextRef ctxt] returns [IQLToLLVMValueRef llvmVal,
 	| WSTRING_LITERAL { IQLToLLVMNotImplemented(); }
 	| TK_TRUE { $llvmVal = IQLToLLVMBuildTrue($ctxt); }
 	| TK_FALSE { $llvmVal = IQLToLLVMBuildFalse($ctxt); }
-	| ^(id=ID (fun=ID {isBinary=1;})?) { $llvmVal = IQLToLLVMBuildVariableRef($ctxt, (const char *) $id.text->chars, isBinary ? (const char *) $fun.text->chars : 0); }
-	| ^('[' id=ID e1 = expression[$ctxt]) { $llvmVal = IQLToLLVMBuildArrayRef($ctxt, (char *) $id.text->chars, e1.llvmVal); }
+	| ^(id=ID (fun=ID {isBinary=1;})?) { $llvmVal = IQLToLLVMBuildVariableRef($ctxt, (const char *) $id.text->chars, isBinary ? (const char *) $fun.text->chars : 0, $id->u); }
+	| ^(c='[' id=ID e1 = expression[$ctxt]) { $llvmVal = IQLToLLVMBuildArrayRef($ctxt, (char *) $id.text->chars, e1.llvmVal, $c->u); }
     | TK_NULL { $llvmVal = IQLToLLVMBuildNull($ctxt); }
     | ^(c=TK_SUM { IQLToLLVMBeginAggregateFunction($ctxt); } e1 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildAggregateFunction($ctxt, (char *) $TK_SUM.text->chars, e1.llvmVal, $c->u); } )
     | ^(c=TK_MAX { IQLToLLVMBeginAggregateFunction($ctxt); } e1 = expression[$ctxt] { $llvmVal = IQLToLLVMBuildAggregateFunction($ctxt, (char *) $TK_MAX.text->chars, e1.llvmVal, $c->u); } )
@@ -245,10 +245,10 @@ expression[IQLCodeGenerationContextRef ctxt] returns [IQLToLLVMValueRef llvmVal,
 
 whenExpression[IQLCodeGenerationContextRef ctxt, void * attr]
     :
-    ^(TK_WHEN e1 = expression[$ctxt] { IQLToLLVMCaseBlockIf($ctxt, e1.llvmVal); } e2 = expression[$ctxt] { IQLToLLVMCaseBlockThen($ctxt, e2.llvmVal, attr); } )
+    ^(TK_WHEN e1 = expression[$ctxt] { IQLToLLVMCaseBlockIf($ctxt, e1.llvmVal); } e2 = expression[$ctxt] { IQLToLLVMCaseBlockThen($ctxt, e2.llvmVal, $e2.start->u, attr); } )
     ;    
 
 elseExpression[IQLCodeGenerationContextRef ctxt, void * attr]
     :
-    ^(TK_ELSE e3 = expression[$ctxt] { IQLToLLVMCaseBlockThen($ctxt, e3.llvmVal, attr); })
+    ^(TK_ELSE e3 = expression[$ctxt] { IQLToLLVMCaseBlockThen($ctxt, e3.llvmVal, $e3.start->u, attr); })
     ;    

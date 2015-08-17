@@ -1169,7 +1169,7 @@ RecordTypeCopy::RecordTypeCopy(const RecordType * source,
 				  sz));
     } else {
       // Set field : target is identified positionally, source by name
-      mSet.push_back(std::make_pair(sourceIt->GetName(), *pos));
+      mSet.push_back(std::make_pair(*sourceIt, *pos));
     }
     *pos += 1;
   }    

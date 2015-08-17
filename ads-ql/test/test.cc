@@ -1855,6 +1855,31 @@ void testRecordLogicalOps(bool isNullable)
     int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
     BOOST_CHECK_EQUAL(val, 1);
   }
+  {
+    RecordTypeFunction equals(ctxt, "doubleeq", types, "y=z OR d=h AND a=e");
+    int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "doubleeq", types, "y=z AND d=h AND a=e");
+    int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "doubleeq", types, "y=z AND d=h AND a=e AND b=f AND c=g");
+    int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 0);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "doubleeq", types, "y=z AND a=e AND b=f AND c=g");
+    int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
+  {
+    RecordTypeFunction equals(ctxt, "doubleeq", types, "y=z OR d=h OR a=e OR b=f OR c=g");
+    int32_t val = equals.execute(lhs, rhs2, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(val, 1);
+  }
 
   if (isNullable) {
     recTy.getFieldAddress("a").setNull(lhs);
@@ -2114,6 +2139,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordUpdate)
   members.push_back(RecordMember("d", Int64Type::Get(ctxt)));
   members.push_back(RecordMember("y", DoubleType::Get(ctxt)));
   members.push_back(RecordMember("s", Int32Type::Get(ctxt, true)));
+  members.push_back(RecordMember("v", Int64Type::Get(ctxt, true)));
   RecordType recTy(members);
   std::vector<RecordMember> rhsMembers;
   // dummy field to make sure that the offsets of fields we are comparing
@@ -2125,6 +2151,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordUpdate)
   rhsMembers.push_back(RecordMember("h", Int64Type::Get(ctxt)));
   rhsMembers.push_back(RecordMember("z", DoubleType::Get(ctxt)));
   rhsMembers.push_back(RecordMember("t", Int32Type::Get(ctxt, true)));
+  rhsMembers.push_back(RecordMember("u", Int64Type::Get(ctxt, true)));
   RecordType rhsTy(rhsMembers);
   std::vector<const RecordType *> types;
   types.push_back(&recTy);
@@ -2137,6 +2164,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordUpdate)
   recTy.setInt64("d", 1239923432, lhs);
   recTy.setDouble("y", 88823.23433, lhs);
   recTy.getFieldAddress("s").setNull(lhs);
+  recTy.getFieldAddress("v").setNull(lhs);
 
   RecordBuffer rhs1 = rhsTy.GetMalloc()->malloc();
   rhsTy.setInt32("dummy", 0, rhs1);
@@ -2146,6 +2174,7 @@ BOOST_AUTO_TEST_CASE(testIQLRecordUpdate)
   rhsTy.setInt64("h", 1239923433, rhs1);
   rhsTy.setDouble("z", 62344.23411, rhs1);
   rhsTy.getFieldAddress("t").setNull(lhs);
+  rhsTy.getFieldAddress("u").setNull(lhs);
 
   {
     RecordTypeInPlaceUpdate up(ctxt, 
@@ -2194,6 +2223,54 @@ BOOST_AUTO_TEST_CASE(testIQLRecordUpdate)
 			       "SET t = NULL");
     up.execute(lhs, rhs1, &runtimeCtxt);
     BOOST_CHECK(rhsTy.getFieldAddress("t").isNull(rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = d");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(1239923432LL, rhsTy.getInt64("u", rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = v");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK(rhsTy.getFieldAddress("u").isNull(rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = 923444LL");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(923444LL, rhsTy.getInt64("u", rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = NULL");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK(rhsTy.getFieldAddress("u").isNull(rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = c");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK_EQUAL(9923432LL, rhsTy.getInt64("u", rhs1));
+  }
+  {
+    RecordTypeInPlaceUpdate up(ctxt, 
+			       "xfer5up", 
+			       types, 
+			       "SET u = s");
+    up.execute(lhs, rhs1, &runtimeCtxt);
+    BOOST_CHECK(rhsTy.getFieldAddress("u").isNull(rhs1));
   }
   {
     try {
@@ -3284,6 +3361,43 @@ BOOST_AUTO_TEST_CASE(testIQLCaseStatementNullCondition)
   BOOST_CHECK_EQUAL(23, t1.getTarget()->getFieldAddress("e").getInt32(outputBuf));
   BOOST_CHECK_EQUAL(23, t1.getTarget()->getFieldAddress("f").getInt32(outputBuf));
   t1.getTarget()->getFree().free(outputBuf);
+}
+
+BOOST_AUTO_TEST_CASE(testIQLCaseStatementNullPromotion)
+{
+  DynamicRecordContext ctxt;
+  std::vector<RecordMember> members;
+  members.push_back(RecordMember("a", Int32Type::Get(ctxt, true)));
+  members.push_back(RecordMember("b", Int32Type::Get(ctxt, true)));
+  members.push_back(RecordMember("c", Int64Type::Get(ctxt)));
+  boost::shared_ptr<RecordType> recordType(new RecordType(members));
+  
+  // Simple Transfer of everything
+  RecordTypeTransfer t1(ctxt, "xfer1", recordType.get(), 
+			"CASE WHEN a=23 THEN b ELSE c END AS d"
+			);
+  BOOST_CHECK(t1.getTarget()->getMember("d").GetType()->isNullable());
+  BOOST_CHECK_EQUAL(FieldType::INT64, t1.getTarget()->getMember("d").GetType()->GetEnum());
+  // Actually execute this thing.
+  InterpreterContext runtimeCtxt;
+  RecordBuffer inputBuf = recordType->GetMalloc()->malloc();
+  recordType->setInt32("a", 23, inputBuf);
+  recordType->setInt32("b", 230, inputBuf);
+  recordType->setInt64("c", 123456, inputBuf);
+  {
+    RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+    t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+    BOOST_CHECK_EQUAL(230LL, t1.getTarget()->getFieldAddress("d").getInt64(outputBuf));
+    BOOST_CHECK(!t1.getTarget()->getFieldAddress("d").isNull(outputBuf));
+    t1.getTarget()->getFree().free(outputBuf);
+  }
+  recordType->getFieldAddress("b").setNull(inputBuf);
+  {
+    RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+    t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+    BOOST_CHECK(t1.getTarget()->getFieldAddress("d").isNull(outputBuf));
+    t1.getTarget()->getFree().free(outputBuf);
+  }
 }
 
 void ValidateRecordAggregate(RecordTypeAggregate& a1,
@@ -4844,6 +4958,30 @@ void testCharCast(bool isNullable)
 
   {
     RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
+			"CAST(a AS CHAR(4)) AS ret");
+    BOOST_CHECK_EQUAL(4, t1.getTarget()->begin_members()->GetType()->GetSize());
+    BOOST_CHECK_EQUAL(FieldType::CHAR, t1.getTarget()->begin_members()->GetType()->GetEnum());
+    RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+    InterpreterContext runtimeCtxt;
+    t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+    char expected [] = "1234";
+    BOOST_CHECK_EQUAL(0, memcmp(&expected, t1.getTarget()->getMemberOffset("ret").getCharPtr(outputBuf), 5));
+    t1.getTarget()->getFree().free(outputBuf);
+  }
+  {
+    RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
+			"CAST(a AS CHAR(8)) AS ret");
+    BOOST_CHECK_EQUAL(8, t1.getTarget()->begin_members()->GetType()->GetSize());
+    BOOST_CHECK_EQUAL(FieldType::CHAR, t1.getTarget()->begin_members()->GetType()->GetEnum());
+    RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+    InterpreterContext runtimeCtxt;
+    t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+    char expected [] = "123456  ";
+    BOOST_CHECK_EQUAL(0, memcmp(&expected, t1.getTarget()->getMemberOffset("ret").getCharPtr(outputBuf), 9));
+    t1.getTarget()->getFree().free(outputBuf);
+  }
+  {
+    RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
 			"CAST(b AS CHAR(4)) AS ret");
     BOOST_CHECK_EQUAL(4, t1.getTarget()->begin_members()->GetType()->GetSize());
     BOOST_CHECK_EQUAL(FieldType::CHAR, t1.getTarget()->begin_members()->GetType()->GetEnum());
@@ -4851,7 +4989,7 @@ void testCharCast(bool isNullable)
     InterpreterContext runtimeCtxt;
     t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
     char expected [] = "abcd";
-    BOOST_CHECK_EQUAL(0, memcmp(&expected, t1.getTarget()->getMemberOffset("ret").getCharPtr(outputBuf), 4));
+    BOOST_CHECK_EQUAL(0, memcmp(&expected, t1.getTarget()->getMemberOffset("ret").getCharPtr(outputBuf), 5));
     t1.getTarget()->getFree().free(outputBuf);
   }
   {
@@ -4902,6 +5040,8 @@ void testDateCast(bool isNullable)
   members.push_back(RecordMember("c", Int32Type::Get(ctxt, isNullable)));
   members.push_back(RecordMember("d", Int64Type::Get(ctxt, isNullable)));
   members.push_back(RecordMember("e", DoubleType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("f", DatetimeType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("g", DateType::Get(ctxt, isNullable)));
   RecordType recTy(members);
 
   RecordBuffer inputBuf = recTy.GetMalloc()->malloc();
@@ -4910,6 +5050,10 @@ void testDateCast(bool isNullable)
   recTy.setInt32("c", 9923432, inputBuf);
   recTy.setInt64("d", 1239923432, inputBuf);
   recTy.setDouble("e", 8234.24344, inputBuf);
+  boost::posix_time::ptime dt = boost::posix_time::time_from_string("2011-02-17 15:38:33");
+  recTy.setDatetime("f", dt, inputBuf);
+  boost::gregorian::date d = boost::gregorian::from_string("2011-02-22");
+  recTy.setDate("g", d, inputBuf);
 
   {
     RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
@@ -4931,6 +5075,17 @@ void testDateCast(bool isNullable)
     InterpreterContext runtimeCtxt;
     t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
     boost::gregorian::date expected(2011, boost::gregorian::Mar, 16);
+    BOOST_CHECK_EQUAL(expected, t1.getTarget()->getMemberOffset("varcharToDate").getDate(outputBuf));
+    t1.getTarget()->getFree().free(outputBuf);
+  }
+  {
+    RecordTypeTransfer t1(ctxt, "xfer1", &recTy, 
+			"CAST(g AS DATE) AS varcharToDate");
+    BOOST_CHECK_EQUAL(FieldType::DATE, t1.getTarget()->begin_members()->GetType()->GetEnum());
+    RecordBuffer outputBuf = t1.getTarget()->GetMalloc()->malloc();
+    InterpreterContext runtimeCtxt;
+    t1.execute(inputBuf, outputBuf, &runtimeCtxt, false);
+    boost::gregorian::date expected(2011, boost::gregorian::Feb, 22);
     BOOST_CHECK_EQUAL(expected, t1.getTarget()->getMemberOffset("varcharToDate").getDate(outputBuf));
     t1.getTarget()->getFree().free(outputBuf);
   }
@@ -4956,12 +5111,18 @@ void testDatetimeCast(bool isNullable)
   members.push_back(RecordMember("a", CharType::Get(ctxt, 10, isNullable)));
   members.push_back(RecordMember("b", VarcharType::Get(ctxt, isNullable)));
   members.push_back(RecordMember("c", VarcharType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("f", DatetimeType::Get(ctxt, isNullable)));
+  members.push_back(RecordMember("g", DateType::Get(ctxt, isNullable)));
   RecordType recTy(members);
 
   RecordBuffer inputBuf = recTy.GetMalloc()->malloc();
   recTy.setChar("a", "2011-03-12", inputBuf);
   recTy.setVarchar("b", "2011-03-16 23:22:59", inputBuf);
   recTy.setVarchar("c", "2012-01-30", inputBuf);
+  boost::posix_time::ptime dt = boost::posix_time::time_from_string("2011-02-17 15:38:33");
+  recTy.setDatetime("f", dt, inputBuf);
+  boost::gregorian::date d = boost::gregorian::from_string("2011-02-22");
+  recTy.setDate("g", d, inputBuf);
   pt::ptime expected1 = pt::time_from_string("2011-03-16 23:22:59");
   pt::ptime expected2 = pt::time_from_string("2012-01-30 12:22:45");
   pt::ptime expected3 = pt::time_from_string("2012-01-30 00:00:00");
@@ -4972,8 +5133,9 @@ void testDatetimeCast(bool isNullable)
 			  ",CAST('2012-01-30 12:22:45' AS DATETIME) AS varcharToDatetimeLiteral"
 			  ",CAST('2012-01-30' AS DATETIME) AS varcharToDateLiteral"
 			  ",CAST(c AS DATETIME) AS varcharToDateVariable"
+			  ",CAST(f AS DATETIME) AS datetimeToDatetime"
 			  );
-    BOOST_CHECK_EQUAL(5U, t1.getTarget()->size());
+    BOOST_CHECK_EQUAL(6U, t1.getTarget()->size());
     for(RecordType::const_member_iterator m = t1.getTarget()->begin_members(),
 	  e = t1.getTarget()->end_members();
 	m != e; ++m) {
@@ -4987,6 +5149,7 @@ void testDatetimeCast(bool isNullable)
     BOOST_CHECK_EQUAL(expected2, t1.getTarget()->getMemberOffset("varcharToDatetimeLiteral").getDatetime(outputBuf));
     BOOST_CHECK_EQUAL(expected3, t1.getTarget()->getMemberOffset("varcharToDateLiteral").getDatetime(outputBuf));
     BOOST_CHECK_EQUAL(expected3, t1.getTarget()->getMemberOffset("varcharToDateVariable").getDatetime(outputBuf));
+    BOOST_CHECK_EQUAL(dt, t1.getTarget()->getMemberOffset("datetimeToDatetime").getDatetime(outputBuf));
     t1.getTarget()->getFree().free(outputBuf);
   }
   recTy.getFree().free(inputBuf);

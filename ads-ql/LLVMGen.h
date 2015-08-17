@@ -92,10 +92,6 @@ extern "C" {
    */
   void IQLToLLVMBuildLocalVariable(IQLCodeGenerationContextRef ctxt, const char * nm, IQLToLLVMValueRef val, void * attrs);
   /**
-   * Create an LLVM type for a primitive type.
-   */
-  LLVMTypeRef IQLToLLVMBuildType(IQLCodeGenerationContextRef ctxt, void * typeAttrs);
-  /**
    * Hash some values.
    */
   IQLToLLVMValueRef IQLToLLVMBuildHash(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueVectorRef lhs);
@@ -241,21 +237,25 @@ extern "C" {
 				       void * argAttrs, void * retAttrs);
 
   void IQLToLLVMBuildReturnValue(IQLCodeGenerationContextRef ctxt, 
-				 IQLToLLVMValueRef llvmVal);
+				 IQLToLLVMValueRef llvmVal,
+				 void * retAttrs);
   void IQLToLLVMBuildSetNullableValue(IQLCodeGenerationContextRef ctxtRef,
 				      IQLToLLVMLValueRef lvalRef,
 				      IQLToLLVMValueRef val,
-				      void * attrs);
+				      void * valAttrs,
+				      void * lvalAttrs);
   IQLToLLVMLValueRef IQLToLLVMBuildLValue(IQLCodeGenerationContextRef ctxt, 
 					  const char * var);
   IQLToLLVMLValueRef IQLToLLVMBuildArrayLValue(IQLCodeGenerationContextRef ctxt, 
 					       const char * var,
 					       IQLToLLVMValueRef idx);
 
-  IQLToLLVMValueRef IQLToLLVMBuildVariableRef(IQLCodeGenerationContextRef ctxt, const char * var, const char * var2);
+  IQLToLLVMValueRef IQLToLLVMBuildVariableRef(IQLCodeGenerationContextRef ctxt, const char * var, const char * var2,
+					      void * varAttrs);
   IQLToLLVMValueRef IQLToLLVMBuildArrayRef(IQLCodeGenerationContextRef ctxt, 
 					   const char * var,
-					   IQLToLLVMValueRef idx);
+					   IQLToLLVMValueRef idx,
+					   void * elementAttrs);
   /**
    * Array constructor
    */
@@ -267,8 +267,8 @@ extern "C" {
    */
   void IQLToLLVMCaseBlockBegin(IQLCodeGenerationContextRef ctxt, void * caseAttrs);
   void IQLToLLVMCaseBlockIf(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueRef condVal);
-  void IQLToLLVMCaseBlockThen(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueRef value, void * caseAttrs);
-  IQLToLLVMValueRef IQLToLLVMCaseBlockFinish(IQLCodeGenerationContextRef ctxt);
+  void IQLToLLVMCaseBlockThen(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueRef value, void * valueAttrs, void * caseAttrs);
+  IQLToLLVMValueRef IQLToLLVMCaseBlockFinish(IQLCodeGenerationContextRef ctxt, void * caseAttrs);
 
   /**
    * Construct a WHILE statement
@@ -284,7 +284,10 @@ extern "C" {
    */
   void IQLToLLVMBeginIfThenElse(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueRef condVal);
   void IQLToLLVMElseIfThenElse(IQLCodeGenerationContextRef ctxt);
-  IQLToLLVMValueRef IQLToLLVMEndIfThenElse(IQLCodeGenerationContextRef ctxt, IQLToLLVMValueRef thenVal, IQLToLLVMValueRef elseVal);
+  IQLToLLVMValueRef IQLToLLVMEndIfThenElse(IQLCodeGenerationContextRef ctxt, 
+					   IQLToLLVMValueRef thenVal, void *thenAttrs,
+					   IQLToLLVMValueRef elseVal, void *elseAttrs,
+					   void * retAttrs);
 
   /**
    * Builder for switch statements

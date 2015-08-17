@@ -226,11 +226,29 @@ public:
 				  const FieldType * idx);
 
   /**
-   * Operations.
+   * Function call 
+   */
+  const FieldType * buildCall(const char * f, std::vector<const FieldType *> & args);
+
+  /**
+   * Hashing and sorting
+   */
+  const FieldType * buildHash(std::vector<const FieldType *> & ty);
+  const FieldType * buildSortPrefix(std::vector<const FieldType *> & ty);
+
+  /**
+   * Unary operations.
+   */
+  const FieldType * buildNegate(const FieldType * ty);
+
+  /**
+   * Binary operations.
    */
   const FieldType * buildAdd(const FieldType * lhs, 
 			     const FieldType * rhs);
   const FieldType * buildSub(const FieldType * lhs, 
+			     const FieldType * rhs);
+  const FieldType * buildMul(const FieldType * lhs, 
 			     const FieldType * rhs);
   const FieldType * buildModulus(const FieldType * lhs, 
 				 const FieldType * rhs);
@@ -238,6 +256,24 @@ public:
 				 const FieldType * rhs);
   const FieldType * buildBitwise(const FieldType * lhs);
 
+  /**
+   * Logical operations
+   */
+  const FieldType * buildEquals(const FieldType * lhs, 
+				const FieldType * rhs);
+  const FieldType * buildCompare(const FieldType * lhs, 
+				 const FieldType * rhs);
+  const FieldType * buildLogicalAnd(const FieldType * lhs, 
+				    const FieldType * rhs);
+  const FieldType * buildLogicalNot(const FieldType * lhs);
+  const FieldType * buildLike(const FieldType * lhs, 
+			      const FieldType * rhs);
+
+  /**
+   * Cast/Conversion
+   */
+  const FieldType * buildCast(const FieldType * lhs, 
+			      const FieldType * target);
 
   /**
    * Primitive types.
@@ -264,6 +300,7 @@ public:
   const FieldType * buildIntervalMonth(const FieldType * ty);
   const FieldType * buildIntervalSecond(const FieldType * ty);
   const FieldType * buildIntervalYear(const FieldType * ty);
+  const FieldType * buildInterval(const char * intervalType, const FieldType * ty);
 
   /**
    * CASE expressions.
@@ -304,14 +341,14 @@ public:
   /**
    * Automatic type promotion interface.
    */
-  const FieldType * castTo(const FieldType * lhs, 
-			   const FieldType * rhs);
+  static const FieldType * castTo(const FieldType * lhs, 
+				  const FieldType * rhs);
 
-  const FieldType * leastCommonType(const FieldType * e1, 
-				    const FieldType * e2);
+  static const FieldType * leastCommonType(const FieldType * e1, 
+					   const FieldType * e2);
 
-  const FieldType * leastCommonTypeNullable(const FieldType * e1, 
-					    const FieldType * e2);
+  static const FieldType * leastCommonTypeNullable(const FieldType * e1, 
+						   const FieldType * e2);
 
   // Lookup a symbol
   const FieldType * lookupType(const char * nm, const char * nm2);

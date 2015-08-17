@@ -1520,7 +1520,7 @@ public:
 class RecordTypeCopy
 {
 public:
-  typedef std::vector<std::pair<std::string, int> > set_type;
+  typedef std::vector<std::pair<RecordMember, int> > set_type;
 private:
   std::vector<MemcpyOp> mMemcpy;
   // Bits that must be copied from source to target
