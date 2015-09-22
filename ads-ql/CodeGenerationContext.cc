@@ -3406,7 +3406,7 @@ const IQLToLLVMValue * CodeGenerationContext::buildVarcharLiteral(const char * v
     varcharMembers[0] = int8Ty;
     varcharMembers[1] = llvm::ArrayType::get(int8Ty,
 					     sizeof(VarcharLarge) - 1);
-    llvm::Type * smallVarcharTy =
+    llvm::StructType * smallVarcharTy =
       llvm::StructType::get(*c, llvm::makeArrayRef(&varcharMembers[0], 2), false);
     // Create the global
     llvm::GlobalVariable * globalVar = new llvm::GlobalVariable(*llvm::unwrap(LLVMModule), 
@@ -3428,7 +3428,7 @@ const IQLToLLVMValue * CodeGenerationContext::buildVarcharLiteral(const char * v
     constMembers[1] = 
       llvm::ConstantArray::get(llvm::ArrayType::get(int8Ty, sizeof(VarcharLarge) - 1), 
 			       llvm::makeArrayRef(&arrayMembers[0], sizeof(VarcharLarge)-1));
-    llvm::Constant * globalVal = llvm::ConstantStruct::getAnon(*c, llvm::makeArrayRef(&constMembers[0], 2), true);
+    llvm::Constant * globalVal = llvm::ConstantStruct::get(smallVarcharTy, llvm::makeArrayRef(&constMembers[0], 2));
     globalVar->setInitializer(globalVal);
     // Cast to varchar type
     llvm::Value * val = 

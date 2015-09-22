@@ -6902,6 +6902,34 @@ BOOST_AUTO_TEST_CASE(testIQLRLike)
   BOOST_CHECK(iql_rlike_is_null(NULL, NULL));
 }
 
+bool iql_rlike_literal(const std::string& val, const std::string& expr)
+{
+  DynamicRecordContext ctxt;
+  InterpreterContext runtimeCtxt;
+
+  std::vector<RecordMember> lhsMembers;
+  lhsMembers.push_back(RecordMember("a", VarcharType::Get(ctxt)));
+  RecordType lhsTy(lhsMembers);
+  std::vector<RecordMember> emptyMembers;
+  RecordType emptyTy(emptyMembers);
+
+  std::vector<const RecordType*> types;
+  types.push_back(&lhsTy);
+  types.push_back(&emptyTy);
+
+  RecordBuffer lhs = lhsTy.GetMalloc()->malloc();
+  lhsTy.setVarchar("a", val.c_str(), lhs);
+
+  RecordTypeFunction fun(ctxt, "rlike", types, expr);
+  bool result = fun.execute(lhs, nullptr, &runtimeCtxt) != 0;
+  lhsTy.GetFree()->free(lhs);
+  return result;
+}
+
+BOOST_AUTO_TEST_CASE(testIQLRLikeLiteral)
+{
+  BOOST_CHECK(iql_rlike_literal("12834.da1", "a RLIKE '.*da1'"));
+}
 
 BOOST_AUTO_TEST_CASE(testStringLiteralEscapes)
 {
