@@ -3444,7 +3444,7 @@ const IQLToLLVMValue * CodeGenerationContext::buildVarcharLiteral(const char * v
     // This is the string value.  Set it as an initializer.
     llvm::Constant * constStr = llvm::ConstantDataArray::getString(*c,
 								   llvm::StringRef(str.c_str(), str.size()),
-								   false);
+								   true);
     globalVar->setInitializer(constStr);
     
     // Now to reference the global we have to use a const GEP.  To pass
