@@ -545,11 +545,11 @@ public:
   ~GenericRecordImporter();
   iterator begin() 
   {
-    mImporters.begin();
+    return mImporters.begin();
   }
   iterator end() 
   {
-    mImporters.end();
+    return mImporters.end();
   }
 };
 

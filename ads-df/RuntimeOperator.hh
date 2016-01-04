@@ -374,7 +374,7 @@ protected:
   }
   boost::asio::io_service& getIOService()
   {
-    mServices.getIOService();
+    return mServices.getIOService();
   }
 
   std::vector<RuntimePort*>& getInputPorts()

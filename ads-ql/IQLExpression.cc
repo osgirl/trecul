@@ -1057,8 +1057,8 @@ IQLExpressionRef IQLBuildIsNull(IQLTreeFactoryRef ctxtRef,
 				int isNot,
 				int line, int column)
 {
-  IQLBuildUnaryFun(ctxtRef, isNot ? "_ISNOTNULL_" : "_ISNULL_",
-		   left, line, column);
+  return IQLBuildUnaryFun(ctxtRef, isNot ? "_ISNOTNULL_" : "_ISNULL_",
+			  left, line, column);
 }
 
 IQLExpressionRef IQLBuildDouble(IQLTreeFactoryRef ctxtRef,

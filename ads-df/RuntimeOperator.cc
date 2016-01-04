@@ -1251,8 +1251,8 @@ void LogicalGroupBy::check(PlanCheckContext& log)
     log.logError(*this, "runningtotal is only supported with sort group by");
   }
 
-  if (init.size() && 0==update.size() ||
-      update.size() && 0==init.size()) {
+  if ((init.size() != 0 && 0==update.size()) ||
+      (update.size() != 0 && 0==init.size())) {
     log.logError(*this, "either specify both initialize and update or output argument");
   }
 

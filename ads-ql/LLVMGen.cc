@@ -200,7 +200,7 @@ IQLToLLVMValueRef IQLToLLVMBuildAnd(IQLCodeGenerationContextRef ctxtRef,
 				    void * retAttrs)
 {
   CodeGenerationContext * ctxt = unwrap(ctxtRef);
-  ctxt->buildAnd(unwrap(rhs), (const FieldType *) rhsAttrs, (const FieldType *) retAttrs);
+  return wrap(ctxt->buildAnd(unwrap(rhs), (const FieldType *) rhsAttrs, (const FieldType *) retAttrs));
 }
 
 void IQLToLLVMBeginOr(IQLCodeGenerationContextRef ctxtRef, void * retAttrs)
@@ -224,7 +224,7 @@ IQLToLLVMValueRef IQLToLLVMBuildOr(IQLCodeGenerationContextRef ctxtRef,
 				    void * retAttrs)
 {
   CodeGenerationContext * ctxt = unwrap(ctxtRef);
-  ctxt->buildOr(unwrap(rhs), (const FieldType *) rhsAttrs, (const FieldType *) retAttrs);
+  return wrap(ctxt->buildOr(unwrap(rhs), (const FieldType *) rhsAttrs, (const FieldType *) retAttrs));
 }
 
 IQLToLLVMValueRef IQLToLLVMBuildNot(IQLCodeGenerationContextRef ctxtRef, IQLToLLVMValueRef lhs,

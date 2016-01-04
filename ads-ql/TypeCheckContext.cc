@@ -729,7 +729,7 @@ const FieldType * TypeCheckContext::buildAdd(const FieldType * lhs,
     return buildCharType(retSz.c_str(), nullable);
   } else {
     const FieldType * ty = leastCommonTypeNullable(lhs, rhs);
-    if(ty == NULL || (!ty->isNumeric() && !ty->GetEnum() == FieldType::VARCHAR && !ty->GetEnum() == FieldType::CHAR)) {
+    if(ty == NULL || (!ty->isNumeric() && ty->GetEnum() != FieldType::VARCHAR && ty->GetEnum() != FieldType::CHAR)) {
       throw std::runtime_error("Can only add numeric and string fields");
     }
     return ty;
@@ -806,7 +806,7 @@ const FieldType * TypeCheckContext::buildEquals(const FieldType * lhs,
 						const FieldType * rhs)
 {
   // In the future we may have types that we can compare for equality but not otherwise
-  buildCompare(lhs, rhs);
+  return buildCompare(lhs, rhs);
 }
 
 const FieldType * TypeCheckContext::buildCompare(const FieldType * lhs, 
