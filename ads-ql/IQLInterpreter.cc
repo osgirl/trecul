@@ -50,7 +50,6 @@
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
-#include "llvm/PassManager.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IRReader/IRReader.h"
@@ -63,6 +62,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -2074,7 +2074,7 @@ void LLVMBase::InitializeLLVM()
     throw std::runtime_error((boost::format("Could not create ExecutionEngine: %1%\n") % ErrStr).str());
   }
 
-  mFPM = new llvm::FunctionPassManager(llvm::unwrap(mContext->LLVMModule));
+  mFPM = new llvm::legacy::FunctionPassManager(llvm::unwrap(mContext->LLVMModule));
 
   // Set up the optimizer pipeline.  Start with registering info about how the
   // target lays out data structures.

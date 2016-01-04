@@ -62,8 +62,10 @@ namespace llvm {
   class Type;
   class Value;
   class ExecutionEngine;
-  class FunctionPassManager;
   class MachineRelocation;
+  namespace legacy {
+    class FunctionPassManager;
+  }
 }
 
 #include "RecordBuffer.hh"
@@ -95,7 +97,7 @@ private:
 
 protected:
   class CodeGenerationContext * mContext;
-  llvm::FunctionPassManager * mFPM;
+  llvm::legacy::FunctionPassManager * mFPM;
   /**
    * Index from address to symbol for external functions.
    * This is needed so we can recognize the relocations of
