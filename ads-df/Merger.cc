@@ -1018,12 +1018,15 @@ void LogicalSort::check(PlanCheckContext& ctxt)
   // Validate that the keys exist and are sortable.
   checkFieldsExist(ctxt, sortKeys, 0);
   checkFieldsExist(ctxt, presortedKeys, 0);
-  
-  // Build key prefix extraction and less than predicate
-  // for sorting.
-  mKeyPrefix = SortKeyPrefixFunction::get(ctxt, input, sortKeys);
-  // Tell LessThan to sort NULLs properly
-  mKeyEq = LessThanFunction::get(ctxt, input, input, sortKeys, true, "sort_less");
+  if (0 < sortKeys.size()) {
+    // Build key prefix extraction and less than predicate
+    // for sorting.
+    mKeyPrefix = SortKeyPrefixFunction::get(ctxt, input, sortKeys);
+    // Tell LessThan to sort NULLs properly
+    mKeyEq = LessThanFunction::get(ctxt, input, input, sortKeys, true, "sort_less");
+  } else {
+    ctxt.logError(*this, "must specify one or more sort keys");
+  }
   if (presortedKeys.size()) {
     mPresortedKeyEq = EqualsFunction::get(ctxt, input, input, presortedKeys, 
 					  "presort_eq", true);
