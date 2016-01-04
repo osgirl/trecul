@@ -2778,6 +2778,8 @@ BOOST_AUTO_TEST_CASE(testSimpleExecWithArgAndStdout)
   BOOST_CHECK(boost::algorithm::equals(buf, "Hello from test"));
 }
 
+#if !defined(__APPLE__)
+// Sadly OSX doesn't support echo -e so these two tests are Linux specific
 BOOST_AUTO_TEST_CASE(testSimpleExecWithArgsAndStdout)
 {
   std::cout << "testSimpleExecWithArgsAndStdout" << std::endl;
@@ -2821,6 +2823,7 @@ BOOST_AUTO_TEST_CASE(testSimpleExecWithManyArgsAndStdout)
   BOOST_CHECK(boost::algorithm::equals(buf1, "Hello"));
   BOOST_CHECK(boost::algorithm::equals(buf2, "from test"));
 }
+#endif
 
 BOOST_AUTO_TEST_CASE(testSimpleExecWithParentEnvAndStdout)
 {

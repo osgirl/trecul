@@ -137,19 +137,20 @@ include_directories ( ${ZLIB_INCLUDE_DIRS} )
 find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
 find_library(LIB_RT rt)
+find_library(LIB_NCURSES ncurses)
 
 #
 # Setup CXX11 flag
 #
-if(CMAKE_COMPILER_IS_GNUCXX)
-   SET(ENABLE_CXX11 "-std=c++11")
-
-   EXECUTE_PROCESS(COMMAND "${CMAKE_CXX_COMPILER} -dumpversion" OUTPUT_VARIABLE GCC_VERSION)
-   if (GCC_VERSION VERSION_LESS 4.7)
-      SET(ENABLE_CXX11 "-std=c++0x")
-   endif()
-
-   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ENABLE_CXX11}")
+include(CheckCXXCompilerFlag)
+CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
+CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
+if(COMPILER_SUPPORTS_CXX11)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+elseif(COMPILER_SUPPORTS_CXX0X)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+else()
+        message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
 endif()
 
 ######################################################

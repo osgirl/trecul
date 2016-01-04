@@ -32,6 +32,10 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+  set (EXTRA_LIBS ${EXTRA_LIBS} ${LIB_RT})
+endif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+
 if (HADOOP_FOUND) 
    set (EXTRA_SOURCE ${EXTRA_SOURCE} HdfsOperator.cc MapReduceJob.cc)
    set (EXTRA_LIBS ${EXTRA_LIBS} ${JAVA_JVM_LIBRARY} ${HADOOP_LIBRARIES})
@@ -65,7 +69,7 @@ TcpOperator.cc
 ${EXTRA_SOURCE}
 )
 
-target_link_libraries( ads-df ads-ql ${ZLIB_LIBRARIES} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${EXTRA_LIBS} ${LIB_RT} )
+target_link_libraries( ads-df ads-ql ${ZLIB_LIBRARIES} ${URIPARSER_LIBRARIES} ${Boost_FILESYSTEM_LIBRARY} ${Boost_IOSTREAMS_LIBRARY} ${Boost_PROGRAM_OPTIONS_LIBRARY} ${Boost_SYSTEM_LIBRARY} ${Boost_THREAD_LIBRARY} ${EXTRA_LIBS} )
 
 add_executable( ads-df-exe ads-df.cc )
 set_target_properties( ads-df-exe PROPERTIES OUTPUT_NAME "ads-df")

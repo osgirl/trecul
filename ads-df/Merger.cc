@@ -1286,6 +1286,8 @@ void RuntimeSortOperator::writeSortRun(SortRun & sortRuns)
 	      ::getenv("USER")).str();
     if (!boost::filesystem::exists(tmpDir))
       tmpDir = "/usr/local/akamai/tmp";
+    if (!boost::filesystem::exists(tmpDir))
+      tmpDir = "/tmp";
   } else {
     if (!boost::filesystem::exists(tmpDir))
       throw std::runtime_error((boost::format("Temp directory doesn't exists: %1%") %
