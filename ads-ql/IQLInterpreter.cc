@@ -50,7 +50,7 @@
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/ExecutionEngine/GenericValue.h"
-#include "llvm/Analysis/Verifier.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Bitcode/BitstreamWriter.h"
@@ -2076,9 +2076,7 @@ void LLVMBase::InitializeLLVM()
 
   mFPM = new llvm::legacy::FunctionPassManager(llvm::unwrap(mContext->LLVMModule));
 
-  // Set up the optimizer pipeline.  Start with registering info about how the
-  // target lays out data structures.
-  mFPM->add(new llvm::DataLayout(*TheExecutionEngine->getDataLayout()));
+  // Set up the optimizer pipeline.
   // Promote allocas to registers.
   mFPM->add(llvm::createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optzns.
@@ -2355,10 +2353,11 @@ void IQLRecordBufferMethodHandle::initialize(const std::string& bitcode,
   llvm::MemoryBuffer * mb = llvm::MemoryBuffer::getMemBuffer(bitcode, "MyModule");
   if (mb == NULL) 
     throw std::runtime_error("Failed to create MemoryBuffer");
-  std::string ErrStr;
-  mModule = llvm::ParseBitcodeFile(mb, ctxt, &ErrStr);
-  if (mModule == NULL)
-    throw std::runtime_error((boost::format("Failed to restore LLVM module: %1%") % ErrStr).str());
+  llvm::ErrorOr<llvm::Module*> errOr = llvm::parseBitcodeFile(mb, ctxt);
+  if (errOr.getError()) {
+    throw std::runtime_error((boost::format("Failed to restore LLVM module: %1%") % errOr.getError().message()).str());
+  }
+  mModule = errOr.get();
   delete mb;
   // Grab the functions pointers.
   for(std::vector<std::string>::const_iterator it=functionNames.begin();
@@ -2371,6 +2370,7 @@ void IQLRecordBufferMethodHandle::initialize(const std::string& bitcode,
   }
 
   llvm::EngineBuilder engBuilder(mModule);
+  std::string ErrStr;
   engBuilder.setErrorStr(&ErrStr);
   engBuilder.setOptLevel(llvm::CodeGenOpt::Default);
   TheExecutionEngine = engBuilder.create();
