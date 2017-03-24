@@ -138,6 +138,7 @@ find_library(LIB_DL dl)
 find_library(LIB_PTHREAD pthread)
 find_library(LIB_RT rt)
 find_library(LIB_NCURSES ncurses)
+find_library(LIB_TINFO tinfo)
 
 #
 # Setup CXX11 flag
