@@ -51,7 +51,6 @@
 #include "RuntimeOperator.hh"
 #include "RuntimeProcess.hh"
 #include "RuntimePlan.hh"
-#include "HdfsOperator.hh"
 #include "QueueImport.hh"
 #include "SuperFastHash.h"
 #include "LoserTree.hh"
