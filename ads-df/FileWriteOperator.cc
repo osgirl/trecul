@@ -35,6 +35,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <fstream>
+#include <iostream>
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>

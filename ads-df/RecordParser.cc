@@ -59,7 +59,7 @@ stdio_file_traits::file_type stdio_file_traits::open_for_read(const char * filen
   seg->mFile = ::open(filename, O_RDONLY);
   if (seg->mFile < 0) {
     int err = errno;    
-    throw std::runtime_error((boost::format("Failed opening file %1%: errno=%2%") % filename % err).str());
+    throw std::runtime_error((boost::format("Failed opening file %1%: errno=%2% message=%3%") % filename % err % strerror(err)).str());
   }
   seg->mEndOffset = endOffset;
   ssize_t sz = lseek(seg->mFile, 0, SEEK_END);
