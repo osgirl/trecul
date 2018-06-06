@@ -37,6 +37,8 @@
 
 #include <zlib.h>
 
+#include <iostream>
+
 #include <boost/iostreams/device/back_inserter.hpp>
 #include <boost/iostreams/stream.hpp>
 #include <boost/thread.hpp>

@@ -38,6 +38,7 @@
 #include <vector>
 #include <list>
 
+#include <boost/asio/io_service.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/thread/mutex.hpp>
 
@@ -49,12 +50,6 @@ class RuntimePort;
 class RuntimeOperator;
 class InProcessFifo;
 class DataflowScheduler;
-
-namespace boost { 
-  namespace asio {
-    class io_service;
-  }
-}
 
 /**
  * A runtime operator process contains a collection of partitions that

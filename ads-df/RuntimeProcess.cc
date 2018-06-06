@@ -857,7 +857,7 @@ ProcessPipe::ProcessPipe()
   int error = ::pipe(pipe_fd);
   if (error == -1) {
     boost::system::system_error err(boost::system::error_code(errno,
-							      boost::system::get_system_category()),
+							      boost::system::system_category()),
 				    "ProcessPipe::ProcessPipe: pipe failed");
   }
 
@@ -973,7 +973,7 @@ int32_t PosixProcessFactory::waitForCompletion(PosixProcessFactory::pid_type pid
     } else {
       // Bad news:  waitpid failed some bad reason.
       ec = boost::system::error_code(errno,
-				     boost::system::get_system_category());
+				     boost::system::system_category());
       return -1;
     }
   } while(true);
@@ -1000,7 +1000,7 @@ void PosixProcessFactory::kill(int32_t signal_number,
     ec.clear();
   } else {
     ec = boost::system::error_code(errno,
-				   boost::system::get_system_category());
+				   boost::system::system_category());
   }
 }
 
