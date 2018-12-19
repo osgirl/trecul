@@ -712,6 +712,7 @@ private:
   int32_t mNumToPrint;
   int32_t mPrintFrequency;
   RecordTypeFunction * mPredicate;
+  RecordTypeTransfer * mTransfer;
 public:
   LogicalPrint();
   ~LogicalPrint();
@@ -728,6 +729,8 @@ private:
   int32_t mNumToPrint;
   int32_t mPrintFrequency;
   IQLFunctionModule * mPredicate;
+  IQLTransferModule * mToPrint;
+  RecordTypeFree mFree;
   
 
   // Serialization
@@ -740,30 +743,39 @@ private:
     ar & BOOST_SERIALIZATION_NVP(mNumToPrint);
     ar & BOOST_SERIALIZATION_NVP(mPrintFrequency);
     ar & BOOST_SERIALIZATION_NVP(mPredicate);
+    ar & BOOST_SERIALIZATION_NVP(mToPrint);
+    ar & BOOST_SERIALIZATION_NVP(mFree);
   }
   RuntimePrintOperatorType()
     :
     mRecordType(NULL),
     mNumToPrint(0),
     mPrintFrequency(1),
-    mPredicate(NULL)
+    mPredicate(NULL),
+    mToPrint(NULL)
   {
   }
 public:
-  RuntimePrintOperatorType(const RecordType * ty, int32_t numToPrint, int32_t printFrequency=1,
-			   const RecordTypeFunction * pred=NULL)
+  RuntimePrintOperatorType(const RecordType * ty, int32_t numToPrint, int32_t printFrequency,
+			   const RecordTypeFunction * pred,
+			   const RecordTypeTransfer * xfer)
     :
     RuntimeOperatorType("RuntimePrintOperatorType"),
     mRecordType(ty),
-    mPrint(ty->getPrint()),
+    mPrint(xfer ? xfer->getTarget()->getPrint() : ty->getPrint()),
     mNumToPrint(numToPrint),
     mPrintFrequency(printFrequency),
-    mPredicate(pred ? pred->create() : NULL)
+    mPredicate(pred ? pred->create() : nullptr),
+    mToPrint(xfer ? xfer->create() : nullptr)
   {
+    if (xfer) {
+      mFree = xfer->getTarget()->getFree();
+    }
   }
   ~RuntimePrintOperatorType()
   {
-    delete mPredicate; 
+    delete mPredicate;
+    delete mToPrint;
   }
   RuntimeOperator * create(RuntimeOperator::Services & s) const;
   const RecordType * getOutputType() const { return mRecordType; }

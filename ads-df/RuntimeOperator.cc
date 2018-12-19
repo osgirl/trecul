@@ -759,18 +759,20 @@ LogicalPrint::LogicalPrint()
   LogicalOperator(1,1,1,1),
   mNumToPrint(5),
   mPrintFrequency(1),
-  mPredicate(NULL)
+  mPredicate(NULL),
+  mTransfer(NULL)
 {
 }
 
 LogicalPrint::~LogicalPrint()
 {
   delete mPredicate;
+  delete mTransfer;
 }
 
 void LogicalPrint::check(PlanCheckContext& log)
 {
-  std::string predicate;
+  std::string predicate, output;
 
   if (size_inputs() != 1) {
   } 
@@ -785,6 +787,8 @@ void LogicalPrint::check(PlanCheckContext& log)
     if (boost::algorithm::iequals(it->Name, "numtoprint") ||
 	boost::algorithm::iequals(it->Name, "limit")) {
       mNumToPrint = boost::get<int32_t>(it->Value);
+    } else if (boost::algorithm::iequals(it->Name, "print")) {
+      output = boost::get<std::string>(it->Value);
     } else if (boost::algorithm::iequals(it->Name, "printfrequency")) {
       mPrintFrequency = boost::get<int32_t>(it->Value);
     } else if (boost::algorithm::iequals(it->Name, "where")) {
@@ -805,6 +809,10 @@ void LogicalPrint::check(PlanCheckContext& log)
 					inputs,
 					predicate);
   }
+
+  if (output.size()) {
+    mTransfer = new RecordTypeTransfer(log, "output_to_print", getInput(0)->getRecordType(), output);
+  }
 }
 
 void LogicalPrint::create(class RuntimePlanBuilder& plan)
@@ -813,7 +821,8 @@ void LogicalPrint::create(class RuntimePlanBuilder& plan)
     new RuntimePrintOperatorType(getInput(0)->getRecordType(),
 				 mNumToPrint,
 				 mPrintFrequency,
-				 mPredicate);
+				 mPredicate,
+				 mTransfer);
   plan.addOperatorType(opType);
   plan.mapInputPort(this, 0, opType, 0);
   plan.mapOutputPort(this, 0, opType, 0);
@@ -881,7 +890,14 @@ void RuntimePrintOperator::onEvent(RuntimePort * port)
 						       RecordBuffer(),
 						       mRuntimeContext))) {
 	    mNumPrinted += 1;
-	    getPrintType().mPrint.print(mInput, std::cout);
+	    if (nullptr != getPrintType().mToPrint) {
+	      RecordBuffer tmp;
+	      getPrintType().mToPrint->execute(mInput, tmp, mRuntimeContext, false);
+	      getPrintType().mPrint.print(tmp, std::cout);
+	      getPrintType().mFree.free(tmp);
+	    } else {
+	      getPrintType().mPrint.print(mInput, std::cout);
+	    }
 	  }
 	  mNumProcessed += 1;
 

@@ -2503,7 +2503,7 @@ void simpleSchedulerWithGroupBy()
   aggs.push_back(AggregateFunctionSpec("*", AggregateFunctionSpec::COUNT, "cnt"));
   aggs.push_back(AggregateFunctionSpec("c", AggregateFunctionSpec::SUM, "s"));
   GroupBy<_OpType> groupBy(ctxt, opType1.getOutputType(), groupByKeys, aggs);
-  RuntimePrintOperatorType opType3(groupBy.getOutputType(), 5);
+  RuntimePrintOperatorType opType3(groupBy.getOutputType(), 5, 1, nullptr, nullptr);
   RuntimeDevNullOperatorType opType4(groupBy.getOutputType());
 
   RuntimeGenerateOperator op1(scheduler, opType1);
@@ -2644,7 +2644,7 @@ BOOST_AUTO_TEST_CASE(testSortMergeJoin)
 		    "a=b",
 		    "a,b");
   RuntimeOperatorType * joinType = smj.create();
-  RuntimePrintOperatorType * printType = new RuntimePrintOperatorType(smj.getOutputType(), 10);
+  RuntimePrintOperatorType * printType = new RuntimePrintOperatorType(smj.getOutputType(), 10, 1, nullptr, nullptr);
   RuntimeDevNullOperatorType * devNullType = new RuntimeDevNullOperatorType(smj.getOutputType());
   RuntimeOperatorPlan plan(1,true);
   plan.addOperatorType(leftType);
@@ -2673,7 +2673,7 @@ BOOST_AUTO_TEST_CASE(testSortMerge)
 	       leftType->getOutputType(),
 	       leftKeys);
   RuntimeOperatorType * joinType = sm.create();
-  RuntimePrintOperatorType * printType = new RuntimePrintOperatorType(sm.getOutputType(), 30);
+  RuntimePrintOperatorType * printType = new RuntimePrintOperatorType(sm.getOutputType(), 30, 1, nullptr, nullptr);
   RuntimeDevNullOperatorType * devNullType = new RuntimeDevNullOperatorType(sm.getOutputType());
   RuntimeOperatorPlan plan(1,true);
   plan.addOperatorType(leftType);

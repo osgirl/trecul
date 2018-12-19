@@ -445,7 +445,7 @@ RuntimeOperatorType * ColumnGroupOutput::create(class RuntimePlanBuilder& plan,
   plan.connect(sortTy, 0, runningTotalTy, 0, false);
 
   RuntimeOperatorType * printTy = 
-    new RuntimePrintOperatorType(mAggregate->getTarget(), 0);
+    new RuntimePrintOperatorType(mAggregate->getTarget(), 0, 1, nullptr, nullptr);
   plan.addOperatorType(printTy);
 
   RuntimeOperatorType * filterTy = 
